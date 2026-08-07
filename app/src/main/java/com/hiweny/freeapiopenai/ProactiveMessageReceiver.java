@@ -49,11 +49,12 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
         SharedPreferences prefs = context.getSharedPreferences("wechat_native_state", Context.MODE_PRIVATE);
         if (!prefs.getBoolean("proactiveEnabled", false)) return;
         int minutes = Math.max(1, prefs.getInt("proactiveIntervalMinutes", 30));
+        int checkMinutes = Math.min(minutes, 3);
         AlarmManager alarm = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         if (alarm == null) return;
         PendingIntent pi = pendingIntent(context);
         alarm.cancel(pi);
-        long triggerAt = System.currentTimeMillis() + minutes * 60_000L;
+        long triggerAt = System.currentTimeMillis() + checkMinutes * 60_000L;
         if (Build.VERSION.SDK_INT >= 23) {
             alarm.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi);
         } else {
@@ -92,8 +93,9 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
             List<Persona> personas = loadPersonas(prefs);
             if (personas.isEmpty()) return;
             int minutes = Math.max(1, prefs.getInt("proactiveIntervalMinutes", 30));
+            String activePersonaId = prefs.getString("activePersonaId", "");
             long now = System.currentTimeMillis();
-            Persona target = chooseTarget(personas, now, minutes);
+            Persona target = chooseTarget(personas, now, minutes, activePersonaId);
             if (target == null) return;
 
             String message = generateProactiveMessage(prefs, target, now, minutes);
@@ -134,18 +136,24 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
         prefs.edit().putString("personasJson", arr.toString()).apply();
     }
 
-    private Persona chooseTarget(List<Persona> personas, long now, int minutes) {
+    private Persona chooseTarget(List<Persona> personas, long now, int minutes, String activePersonaId) {
         Persona best = null;
         long bestIdle = 0;
-        long minGap = Math.max(1, minutes) * 60_000L;
+        boolean bestActive = false;
+        long activeIdleGap = 60_000L;
+        long otherIdleGap = Math.max(1, Math.min(minutes, 3)) * 60_000L;
+        long repeatGap = Math.max(3, minutes) * 60_000L;
         for (Persona p : personas) {
             long lastUser = p.lastUserMessageTime > 0 ? p.lastUserMessageTime : p.lastMessageTime;
             long idle = now - lastUser;
-            if (idle < minGap) continue;
-            if (p.lastProactiveTime > 0 && now - p.lastProactiveTime < minGap * 2L) continue;
-            if (best == null || idle > bestIdle || (p.pinned && !best.pinned)) {
+            boolean active = p.id != null && p.id.equals(activePersonaId);
+            long requiredIdle = active ? activeIdleGap : otherIdleGap;
+            if (idle < requiredIdle) continue;
+            if (p.lastProactiveTime > 0 && now - p.lastProactiveTime < repeatGap) continue;
+            if (best == null || (active && !bestActive) || (!bestActive && idle > bestIdle) || (p.pinned && !best.pinned)) {
                 best = p;
                 bestIdle = idle;
+                bestActive = active;
             }
         }
         return best;
@@ -165,7 +173,7 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
                 .append("\n");
         sb.append("后台心跳说明：应用大约每 ").append(heartbeatMinutes)
                 .append(" 分钟醒来检查一次，但这不是让你每次都发消息。你必须像真实的人一样，自主判断此刻要不要打扰用户。\n")
-                .append("用户距离上次发消息约 ").append(idleMinutes).append(" 分钟。\n");
+                .append("用户距离上次发消息约 ").append(idleMinutes).append(" 分钟；如果刚聊完但用户短时间没有回复，也可以像真人一样判断是否补一句、撒娇一句、提醒一句或安静跳过。\n");
         if (p.hiddenMemory != null && !p.hiddenMemory.trim().isEmpty()) {
             sb.append("长期背景，只用于保持一致，不要主动暴露：\n").append(p.hiddenMemory.trim()).append("\n");
         }
@@ -177,7 +185,7 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
             sb.append(m.user ? userName : p.name).append("：").append(m.text).append("\n");
         }
         sb.append("\n# 主动消息判断\n")
-                .append("请根据当前时间、最近聊天氛围、关系亲密度、用户是否刚忙完、是否太晚/太早、上次是谁先结束对话，自主判断是否应该主动发消息。\n")
+                .append("请根据当前时间、最近聊天氛围、关系亲密度、用户是否刚忙完、是否太晚/太早、上次是谁先结束对话、用户短时间没回是否需要补一句，自主判断是否应该主动发消息。\n")
                 .append("不自然、太频繁、像机器人定时任务、可能打扰用户时，只回复 [skip]。\n")
                 .append("只有你觉得此刻真实地想找用户说一句，才发一条很短的微信式消息，1-2句即可，必要时用单个反斜线 \\ 拆分气泡。\n")
                 .append("不要解释判断过程，不要输出名字前缀。")

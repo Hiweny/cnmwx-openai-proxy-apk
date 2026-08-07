@@ -53,6 +53,7 @@ public class MainActivity extends Activity {
     private static final int REQ_NOTIFICATIONS = 3004;
     private static final int MAX_TEMP_LOGS = 60;
     private static final int MAX_CORE_MEMORIES = 50;
+    private static final int MAX_RENDER_MESSAGES = 90;
 
     private static final int C_GREEN = Color.parseColor("#07C160");
     private static final int C_RED = Color.parseColor("#EF4444");
@@ -93,6 +94,7 @@ public class MainActivity extends Activity {
     private ChatTheme theme = ChatTheme.WECHAT_DARK;
     private boolean generating = false;
     private ChatMessage currentAssistant;
+    private Persona currentGeneratingPersona;
     private long lastOrganizedCount = 0;
     private int pendingPickPersonaIndex = -1;
 
@@ -106,6 +108,12 @@ public class MainActivity extends Activity {
         buildUi();
         renderAll();
         ProactiveMessageReceiver.schedule(this);
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (proactiveEnabled) ProactiveMessageReceiver.schedule(this);
     }
 
     private void setupWindow() {
@@ -202,7 +210,7 @@ public class MainActivity extends Activity {
         wallpaperView = new ImageView(this);
         wallpaperView.setScaleType(ImageView.ScaleType.CENTER_CROP);
         wallpaperView.setAlpha(theme.dark ? 0.24f : 0.32f);
-        if (!wallpaperUri.isEmpty()) wallpaperView.setImageURI(Uri.parse(wallpaperUri));
+        safeSetImageUri(wallpaperView, wallpaperUri);
         root.addView(wallpaperView, new FrameLayout.LayoutParams(-1, -1));
 
         LinearLayout main = new LinearLayout(this);
@@ -491,7 +499,7 @@ public class MainActivity extends Activity {
         context.setInputType(InputType.TYPE_CLASS_NUMBER);
         EditText threshold = field("自动整理阈值（消息条数）", String.valueOf(memoryThreshold), 1);
         threshold.setInputType(InputType.TYPE_CLASS_NUMBER);
-        EditText proactiveInterval = field("主动消息心跳间隔（分钟，建议 15-60）", String.valueOf(proactiveIntervalMinutes), 1);
+        EditText proactiveInterval = field("主动消息判断间隔（分钟，建议 3-15）", String.valueOf(proactiveIntervalMinutes), 1);
         proactiveInterval.setInputType(InputType.TYPE_CLASS_NUMBER);
         Button auto = listButton(autoMemory ? "自动整理：开" : "自动整理：关");
         final boolean[] autoValue = {autoMemory};
@@ -556,7 +564,7 @@ public class MainActivity extends Activity {
         sideContent.addView(threshold);
         sideContent.addView(sidebarText("自动整理阈值：累计多少条临时聊天后整理为长期记忆。越小越频繁，建议 30。"));
         sideContent.addView(proactiveInterval);
-        sideContent.addView(sidebarText("主动消息心跳：开启后按这个间隔唤醒一次后台检查。它不是到点必发，而是让当前最合适的人设结合时间、上下文和聊天氛围自主判断要不要发、发什么；不自然或可能打扰你时会跳过。安卓会受通知权限、电池优化和厂商后台限制影响；点“申请通知权限 / 后台保活”后，再点“立即测试主动消息通知”可以马上确认弹窗是否正常。"));
+        sideContent.addView(sidebarText("主动消息判断：这个数字是“判断周期”，不是“必发周期”。后台会自动以 1-3 分钟的轻量心跳检查当前人设；到达你设置的节奏后，人设会结合当前时间、上下文、你短时间没回复这件事和聊天氛围，自主判断是否主动补一句、发新话题或跳过。安卓会受通知权限、电池优化和厂商后台限制影响；点“申请通知权限 / 后台保活”后，再点“立即测试主动消息通知”可以马上确认弹窗是否正常。"));
         sideContent.addView(auto);
         sideContent.addView(time);
         sideContent.addView(proactive);
@@ -587,7 +595,14 @@ public class MainActivity extends Activity {
             tip.tickle = true;
             messageList.addView(systemBubble(tip));
         } else {
-            for (ChatMessage m : p.messages) {
+            int start = Math.max(0, p.messages.size() - MAX_RENDER_MESSAGES);
+            if (start > 0) {
+                ChatMessage folded = new ChatMessage(false, "已折叠 " + start + " 条较早消息，减少卡顿");
+                folded.tickle = true;
+                messageList.addView(systemBubble(folded));
+            }
+            for (int i = start; i < p.messages.size(); i++) {
+                ChatMessage m = p.messages.get(i);
                 if (m.memoryDivider || m.tickle || m.recalled) messageList.addView(systemBubble(m));
                 else messageList.addView(chatBubble(p, m));
             }
@@ -657,7 +672,7 @@ public class MainActivity extends Activity {
         if (uri != null && !uri.isEmpty()) {
             ImageView img = new ImageView(this);
             img.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            img.setImageURI(Uri.parse(uri));
+            safeSetImageUri(img, uri);
             img.setBackground(round(Color.TRANSPARENT, dp(theme.avatarRadius)));
             if (Build.VERSION.SDK_INT >= 21) img.setClipToOutline(true);
             box.addView(img, new FrameLayout.LayoutParams(-1, -1));
@@ -694,6 +709,7 @@ public class MainActivity extends Activity {
         currentAssistant = new ChatMessage(false, TYPING_TEXT);
         currentAssistant.loading = true;
         currentAssistantBuffer = new StringBuilder();
+        currentGeneratingPersona = p;
         p.messages.add(currentAssistant);
         p.lastMessageTime = System.currentTimeMillis();
         generating = true;
@@ -705,11 +721,7 @@ public class MainActivity extends Activity {
             api.streamAsync(prompt, new UpstreamClient.StreamCallback() {
                 @Override
                 public void onDelta(String delta) {
-                    ui.post(() -> {
-                        if (currentAssistant != null) {
-                            appendAssistantDelta(delta);
-                        }
-                    });
+                    appendAssistantDelta(delta);
                 }
 
                 @Override
@@ -727,6 +739,7 @@ public class MainActivity extends Activity {
                         }
                         currentAssistant = null;
                         currentAssistantBuffer = null;
+                        currentGeneratingPersona = null;
                         generating = false;
                         updateSendButton();
                         saveState();
@@ -812,7 +825,10 @@ public class MainActivity extends Activity {
     private void finishAssistantResponse(Persona p) {
         if (currentAssistant == null) return;
         ChatMessage firstBubble = currentAssistant;
-        String raw = currentAssistantBuffer == null ? "" : currentAssistantBuffer.toString().trim();
+        String raw;
+        synchronized (this) {
+            raw = currentAssistantBuffer == null ? "" : currentAssistantBuffer.toString().trim();
+        }
         MessageParser.Parsed parsed = MessageParser.parse(raw);
         firstBubble.text = TYPING_TEXT;
         firstBubble.loading = true;
@@ -821,17 +837,18 @@ public class MainActivity extends Activity {
         if (parsed.parts.isEmpty()) {
             firstBubble.loading = false;
             firstBubble.text = "我刚刚走神了，再发一次试试";
+            if (currentAssistantTextView != null) currentAssistantTextView.setText(firstBubble.text);
+            saveState();
+            if (parsed.recall) renderAll();
         } else {
             revealAssistantParts(p, firstBubble, parsed.parts);
             addTempLog(p, "ai", joinParts(parsed.parts));
         }
         currentAssistant = null;
         currentAssistantBuffer = null;
+        currentGeneratingPersona = null;
         generating = false;
         updateSendButton();
-        saveState();
-        renderAll();
-        maybeAutoOrganize(p);
         ProactiveMessageReceiver.schedule(this);
     }
 
@@ -840,20 +857,38 @@ public class MainActivity extends Activity {
         for (int i = 0; i < parts.size(); i++) {
             final int index = i;
             final String part = parts.get(i);
-            long delay = 420L + index * 720L + Math.min(380L, part.length() * 10L);
+            long delay = index == 0 ? 80L : 260L + index * 360L + Math.min(160L, part.length() * 6L);
             ui.postDelayed(() -> {
+                boolean active = p.id.equals(activePersonaId);
                 if (index == 0) {
                     firstBubble.loading = false;
                     firstBubble.text = part;
+                    if (active && currentAssistantTextView != null) {
+                        currentAssistantTextView.setText(part);
+                    }
                 } else {
-                    p.messages.add(new ChatMessage(false, part));
+                    ChatMessage next = new ChatMessage(false, part);
+                    p.messages.add(next);
+                    if (active && messageList != null) {
+                        appendMessageView(p, next);
+                    }
                 }
                 p.lastMessageTime = System.currentTimeMillis();
-                saveState();
-                renderAll();
-                scrollBottom();
+                if (active) scrollBottom();
+                if (index == parts.size() - 1) {
+                    saveState();
+                    maybeAutoOrganize(p);
+                }
             }, delay);
         }
+    }
+
+    private void appendMessageView(Persona p, ChatMessage m) {
+        if (messageList == null || p == null || m == null) return;
+        if (messageList.getChildCount() > MAX_RENDER_MESSAGES + 1) {
+            messageList.removeViewAt(0);
+        }
+        messageList.addView(m.memoryDivider || m.tickle || m.recalled ? systemBubble(m) : chatBubble(p, m));
     }
 
     private void stopGeneration() {
@@ -864,6 +899,7 @@ public class MainActivity extends Activity {
         }
         currentAssistant = null;
         currentAssistantBuffer = null;
+        currentGeneratingPersona = null;
         generating = false;
         updateSendButton();
         saveState();
@@ -891,15 +927,16 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "正在整理记忆...", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
             try {
+                UpstreamClient memoryApi = new UpstreamClient();
                 String dialogue = buildTempDialogue(p);
                 String date = new SimpleDateFormat("yyyy年M月d日 EEEE", Locale.CHINA).format(new Date());
                 String summaryPrompt = "当前日期：" + date + "\n请以" + p.name + "的视角，用中文总结以下对话，提取重要信息总结为一段话作为记忆片段。必须使用具体日期，禁止使用今天、昨天等相对时间。直接回复一段话：\n" + dialogue;
-                String summary = api.complete(summaryPrompt).replace("\n", " ").trim();
+                String summary = memoryApi.complete(summaryPrompt).replace("\n", " ").trim();
                 if (summary.length() > 260) summary = summary.substring(0, 260);
 
                 int importance = 3;
                 try {
-                    String score = api.complete("为以下记忆的重要性评分（1-5，直接回复数字）：\n" + summary);
+                    String score = memoryApi.complete("为以下记忆的重要性评分（1-5，直接回复数字）：\n" + summary);
                     for (char c : score.toCharArray()) {
                         if (c >= '1' && c <= '5') {
                             importance = c - '0';
@@ -910,7 +947,7 @@ public class MainActivity extends Activity {
                 }
                 String category = "other";
                 try {
-                    String cat = api.complete("将以下记忆分类，直接回复一个分类名：user_info、preference、event、other。\n记忆内容：" + summary).trim();
+                    String cat = memoryApi.complete("将以下记忆分类，直接回复一个分类名：user_info、preference、event、other。\n记忆内容：" + summary).trim();
                     if (cat.contains("user_info")) category = "user_info";
                     else if (cat.contains("preference")) category = "preference";
                     else if (cat.contains("event")) category = "event";
@@ -1106,7 +1143,7 @@ public class MainActivity extends Activity {
             proactiveValue[0] = !proactiveValue[0];
             proactive.setText(proactiveValue[0] ? "主动消息：开" : "主动消息：关");
         });
-        EditText proactiveInterval = field("主动消息心跳间隔（分钟，建议 15-60）", String.valueOf(proactiveIntervalMinutes), 1);
+        EditText proactiveInterval = field("主动消息判断间隔（分钟，建议 3-15）", String.valueOf(proactiveIntervalMinutes), 1);
         proactiveInterval.setInputType(InputType.TYPE_CLASS_NUMBER);
         Button notify = listButton("申请通知权限 / 后台保活");
         notify.setOnClickListener(v -> {
@@ -1206,19 +1243,22 @@ public class MainActivity extends Activity {
         p.messages.add(ai);
         currentAssistant = ai;
         currentAssistantBuffer = new StringBuilder();
+        currentGeneratingPersona = p;
         generating = true;
         updateSendButton();
-        renderAll();
+        appendMessageView(p, ai);
+        scrollBottom();
         String prompt = buildProactivePrompt(p, true);
         api.streamAsync(prompt, new UpstreamClient.StreamCallback() {
             @Override public void onDelta(String delta) {
-                ui.post(() -> {
-                    appendAssistantDelta(delta);
-                });
+                appendAssistantDelta(delta);
             }
             @Override public void onDone() {
                 ui.post(() -> {
-                    String raw = currentAssistantBuffer == null ? "" : currentAssistantBuffer.toString().trim();
+                    String raw;
+                    synchronized (MainActivity.this) {
+                        raw = currentAssistantBuffer == null ? "" : currentAssistantBuffer.toString().trim();
+                    }
                     MessageParser.Parsed parsed = MessageParser.parse(raw);
                     String notifyText = parsed.parts.isEmpty() ? "" : parsed.parts.get(0);
                     p.lastProactiveTime = System.currentTimeMillis();
@@ -1232,6 +1272,7 @@ public class MainActivity extends Activity {
                     ai.text = "我本来想主动找你来着，结果卡住了";
                     currentAssistant = null;
                     currentAssistantBuffer = null;
+                    currentGeneratingPersona = null;
                     generating = false;
                     updateSendButton();
                     saveState();
@@ -1372,7 +1413,7 @@ public class MainActivity extends Activity {
         }
         if (requestCode == REQ_WALLPAPER) {
             wallpaperUri = uri.toString();
-            wallpaperView.setImageURI(uri);
+            safeSetImageUri(wallpaperView, wallpaperUri);
         } else if (requestCode == REQ_USER_AVATAR) {
             userAvatarUri = uri.toString();
         } else if (requestCode == REQ_PERSONA_AVATAR && pendingPickPersonaIndex >= 0 && pendingPickPersonaIndex < personas.size()) {
@@ -1489,15 +1530,27 @@ public class MainActivity extends Activity {
     }
 
     private void appendAssistantDelta(String delta) {
-        if (currentAssistant == null || delta == null || delta.isEmpty()) return;
-        if (currentAssistantBuffer == null) {
-            currentAssistantBuffer = new StringBuilder();
-            if (currentAssistant.text != null && !TYPING_TEXT.equals(currentAssistant.text)) {
-                currentAssistantBuffer.append(currentAssistant.text);
+        if (delta == null || delta.isEmpty()) return;
+        synchronized (this) {
+            if (currentAssistant == null || currentGeneratingPersona == null) return;
+            if (currentAssistantBuffer == null) {
+                currentAssistantBuffer = new StringBuilder();
+                if (currentAssistant.text != null && !TYPING_TEXT.equals(currentAssistant.text)) {
+                    currentAssistantBuffer.append(currentAssistant.text);
+                }
             }
+            currentAssistantBuffer.append(delta);
+            currentAssistant.text = TYPING_TEXT;
         }
-        currentAssistantBuffer.append(delta);
-        currentAssistant.text = TYPING_TEXT;
+    }
+
+    private void safeSetImageUri(ImageView imageView, String uri) {
+        if (imageView == null || uri == null || uri.trim().isEmpty()) return;
+        try {
+            imageView.setImageURI(Uri.parse(uri));
+        } catch (Exception ignored) {
+            imageView.setImageDrawable(null);
+        }
     }
 
     private void showThemePicker() {
