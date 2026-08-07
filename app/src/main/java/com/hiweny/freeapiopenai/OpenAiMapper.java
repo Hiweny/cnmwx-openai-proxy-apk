@@ -1,6 +1,7 @@
 package com.hiweny.freeapiopenai;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.util.UUID;
@@ -10,17 +11,25 @@ public class OpenAiMapper {
         return System.currentTimeMillis() / 1000L;
     }
 
+    private static void put(JSONObject object, String key, Object value) {
+        try {
+            object.put(key, value);
+        } catch (JSONException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     public static String models() {
         JSONObject root = new JSONObject();
         JSONArray data = new JSONArray();
         JSONObject model = new JSONObject();
-        model.put("id", "free-api");
-        model.put("object", "model");
-        model.put("created", now());
-        model.put("owned_by", "free-api.cnmwx.com");
+        put(model, "id", "free-api");
+        put(model, "object", "model");
+        put(model, "created", now());
+        put(model, "owned_by", "free-api.cnmwx.com");
         data.put(model);
-        root.put("object", "list");
-        root.put("data", data);
+        put(root, "object", "list");
+        put(root, "data", data);
         return root.toString();
     }
 
@@ -79,14 +88,14 @@ public class OpenAiMapper {
         JSONArray choices = new JSONArray();
         JSONObject choice = new JSONObject();
         JSONObject msg = new JSONObject();
-        msg.put("role", "assistant");
-        msg.put("content", text);
-        choice.put("index", 0);
-        choice.put("message", msg);
-        choice.put("finish_reason", "stop");
+        put(msg, "role", "assistant");
+        put(msg, "content", text);
+        put(choice, "index", 0);
+        put(choice, "message", msg);
+        put(choice, "finish_reason", "stop");
         choices.put(choice);
-        root.put("choices", choices);
-        root.put("usage", usage(0, text.length()));
+        put(root, "choices", choices);
+        put(root, "usage", usage(0, text.length()));
         return root.toString();
     }
 
@@ -94,12 +103,12 @@ public class OpenAiMapper {
         JSONObject root = base("text_completion", model);
         JSONArray choices = new JSONArray();
         JSONObject choice = new JSONObject();
-        choice.put("index", 0);
-        choice.put("text", text);
-        choice.put("finish_reason", "stop");
+        put(choice, "index", 0);
+        put(choice, "text", text);
+        put(choice, "finish_reason", "stop");
         choices.put(choice);
-        root.put("choices", choices);
-        root.put("usage", usage(0, text.length()));
+        put(root, "choices", choices);
+        put(root, "usage", usage(0, text.length()));
         return root.toString();
     }
 
@@ -108,12 +117,12 @@ public class OpenAiMapper {
         JSONArray choices = new JSONArray();
         JSONObject choice = new JSONObject();
         JSONObject delta = new JSONObject();
-        delta.put("role", "assistant");
-        choice.put("index", 0);
-        choice.put("delta", delta);
-        choice.put("finish_reason", JSONObject.NULL);
+        put(delta, "role", "assistant");
+        put(choice, "index", 0);
+        put(choice, "delta", delta);
+        put(choice, "finish_reason", JSONObject.NULL);
         choices.put(choice);
-        root.put("choices", choices);
+        put(root, "choices", choices);
         return root.toString();
     }
 
@@ -122,12 +131,12 @@ public class OpenAiMapper {
         JSONArray choices = new JSONArray();
         JSONObject choice = new JSONObject();
         JSONObject delta = new JSONObject();
-        delta.put("content", deltaText);
-        choice.put("index", 0);
-        choice.put("delta", delta);
-        choice.put("finish_reason", JSONObject.NULL);
+        put(delta, "content", deltaText);
+        put(choice, "index", 0);
+        put(choice, "delta", delta);
+        put(choice, "finish_reason", JSONObject.NULL);
         choices.put(choice);
-        root.put("choices", choices);
+        put(root, "choices", choices);
         return root.toString();
     }
 
@@ -135,11 +144,11 @@ public class OpenAiMapper {
         JSONObject root = base("chat.completion.chunk", model);
         JSONArray choices = new JSONArray();
         JSONObject choice = new JSONObject();
-        choice.put("index", 0);
-        choice.put("delta", new JSONObject());
-        choice.put("finish_reason", "stop");
+        put(choice, "index", 0);
+        put(choice, "delta", new JSONObject());
+        put(choice, "finish_reason", "stop");
         choices.put(choice);
-        root.put("choices", choices);
+        put(root, "choices", choices);
         return root.toString();
     }
 
@@ -147,11 +156,11 @@ public class OpenAiMapper {
         JSONObject root = base("text_completion.chunk", model);
         JSONArray choices = new JSONArray();
         JSONObject choice = new JSONObject();
-        choice.put("index", 0);
-        choice.put("text", deltaText);
-        choice.put("finish_reason", JSONObject.NULL);
+        put(choice, "index", 0);
+        put(choice, "text", deltaText);
+        put(choice, "finish_reason", JSONObject.NULL);
         choices.put(choice);
-        root.put("choices", choices);
+        put(root, "choices", choices);
         return root.toString();
     }
 
@@ -159,11 +168,11 @@ public class OpenAiMapper {
         JSONObject root = base("text_completion.chunk", model);
         JSONArray choices = new JSONArray();
         JSONObject choice = new JSONObject();
-        choice.put("index", 0);
-        choice.put("text", "");
-        choice.put("finish_reason", "stop");
+        put(choice, "index", 0);
+        put(choice, "text", "");
+        put(choice, "finish_reason", "stop");
         choices.put(choice);
-        root.put("choices", choices);
+        put(root, "choices", choices);
         return root.toString();
     }
 
@@ -174,26 +183,26 @@ public class OpenAiMapper {
     public static String error(String type, String message) {
         JSONObject root = new JSONObject();
         JSONObject error = new JSONObject();
-        error.put("type", type);
-        error.put("message", message == null ? "unknown error" : message);
-        root.put("error", error);
+        put(error, "type", type);
+        put(error, "message", message == null ? "unknown error" : message);
+        put(root, "error", error);
         return root.toString();
     }
 
     private static JSONObject base(String object, String model) {
         JSONObject root = new JSONObject();
-        root.put("id", "chatcmpl-" + UUID.randomUUID().toString().replace("-", ""));
-        root.put("object", object);
-        root.put("created", now());
-        root.put("model", model == null || model.isEmpty() ? "free-api" : model);
+        put(root, "id", "chatcmpl-" + UUID.randomUUID().toString().replace("-", ""));
+        put(root, "object", object);
+        put(root, "created", now());
+        put(root, "model", model == null || model.isEmpty() ? "free-api" : model);
         return root;
     }
 
     private static JSONObject usage(int promptTokens, int completionTokens) {
         JSONObject usage = new JSONObject();
-        usage.put("prompt_tokens", promptTokens);
-        usage.put("completion_tokens", completionTokens);
-        usage.put("total_tokens", promptTokens + completionTokens);
+        put(usage, "prompt_tokens", promptTokens);
+        put(usage, "completion_tokens", completionTokens);
+        put(usage, "total_tokens", promptTokens + completionTokens);
         return usage;
     }
 }
