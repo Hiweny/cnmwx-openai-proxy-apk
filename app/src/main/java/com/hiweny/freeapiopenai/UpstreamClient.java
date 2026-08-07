@@ -31,9 +31,16 @@ public class UpstreamClient {
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
     private final OkHttpClient client;
+    private volatile okhttp3.Call currentCall;
 
     public interface DeltaCallback {
         void onDelta(String text) throws Exception;
+    }
+
+    public interface StreamCallback {
+        void onDelta(String text);
+        void onDone();
+        void onError(Exception error);
     }
 
     public UpstreamClient() {
@@ -55,6 +62,24 @@ public class UpstreamClient {
         return AdFilter.cleanAll(sb.toString()).trim();
     }
 
+    public void streamAsync(String prompt, StreamCallback callback) {
+        new Thread(() -> {
+            try {
+                stream(prompt, callback::onDelta);
+                callback.onDone();
+            } catch (Exception e) {
+                callback.onError(e);
+            }
+        }, "cnmwx-native-stream").start();
+    }
+
+    public void cancel() {
+        okhttp3.Call call = currentCall;
+        if (call != null) {
+            call.cancel();
+        }
+    }
+
     /**
      * Streaming completion. Calls callback for each text delta.
      * Handles the non-standard SSE format from the upstream API.
@@ -72,7 +97,9 @@ public class UpstreamClient {
                 .header("Cache-Control", "no-cache")
                 .build();
 
-        try (Response response = client.newCall(request).execute()) {
+        okhttp3.Call call = client.newCall(request);
+        currentCall = call;
+        try (Response response = call.execute()) {
             if (!response.isSuccessful()) {
                 throw new IllegalStateException("上游接口返回错误码: " + response.code());
             }
@@ -93,6 +120,10 @@ public class UpstreamClient {
                 if (!cleaned.isEmpty()) {
                     callback.onDelta(cleaned);
                 }
+            }
+        } finally {
+            if (currentCall == call) {
+                currentCall = null;
             }
         }
     }

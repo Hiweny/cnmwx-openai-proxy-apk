@@ -1,128 +1,36 @@
-# 公益 API OpenAI 兼容代理 APK
+# 公益聊天 APK
 
-将 `https://free-api.cnmwx.com/v1/completions` 公益 API 包装为本地 OpenAI 兼容接口的 Android 应用。在手机上启动前台服务，监听 `8787` 端口，自动过滤广告，支持工具调用、流式响应和多模型别名。
+一个直接调用 `https://free-api.cnmwx.com/v1/completions` 公益接口的 Android 聊天应用。不再启动本地 OpenAI 代理，不再跑后台服务，也不再注入复杂工具调用提示词，目标是更稳定、更快、更自然地使用这个原生免费接口。
 
 ## 功能特性
 
-- **OpenAI 兼容接口**：`/v1/chat/completions`、`/v1/completions`、`/v1/models`
-- **API Key 支持**：接受任意 Bearer Token（兼容所有 OpenAI 客户端）
-- **模型列表**：支持 `free-api`、`gemini-pro`、`gemini-1.5-pro`、`gpt-4o` 等多个别名
-- **工具调用**：通过提示词注入 + `<tool_call>` 标签解析实现 function calling
-- **流式 SSE**：标准 `data: {...}\n\n` 格式，支持 `stream: true`
-- **广告过滤**：自动移除上游响应中的广告内容
-- **深色模式 UI**：Material Design 深色主题，卡片式布局
-- **前台服务**：后台持久运行，通知栏显示状态
-- **内置测试**：一键测试连接，查看模型回复
+- **直连公益接口**：请求体直接使用 `{"prompt":"..."}`，完全适配原生接口
+- **流式聊天**：边生成边显示，支持停止生成
+- **广告过滤**：自动移除上游开头注入的公益站广告
+- **自定义人格**：可设置助手名称和系统人格
+- **时间上下文**：可开关当前时间注入，适合问日期、时间相关问题
+- **轻量上下文**：默认只带最近几轮对话，避免提示词过长导致回答变笨
+- **壁纸设置**：支持从相册选择聊天壁纸，叠加渐变遮罩保证可读性
+- **动态背景**：无壁纸时使用 Mesh 渐变背景
+- **美观聊天 UI**：参考 RikkaHub 的聊天页结构，保留顶部栏、消息气泡、底部输入栏和设置弹层
+- **不跑后台服务**：只有打开应用时聊天，不再依赖前台服务保活
 
 ## 快速开始
 
 1. 从 [Releases](../../releases) 下载最新 APK
-2. 安装后打开应用，点击「启动代理」
-3. 在 OpenAI 客户端中配置：
-
-| 配置项 | 值 |
-|--------|-----|
-| Base URL | `http://127.0.0.1:8787/v1` |
-| API Key | `sk-free-api`（任意值均可） |
-| Model | `free-api`（或其他别名） |
-
-## 请求示例
-
-### 非流式
-
-```bash
-curl http://127.0.0.1:8787/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-free-api" \
-  -d '{
-    "model": "free-api",
-    "messages": [{"role": "user", "content": "你好"}]
-  }'
-```
-
-### 流式
-
-```bash
-curl http://127.0.0.1:8787/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "free-api",
-    "stream": true,
-    "messages": [{"role": "user", "content": "写一首诗"}]
-  }'
-```
-
-### 工具调用
-
-```bash
-curl http://127.0.0.1:8787/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "free-api",
-    "messages": [{"role": "user", "content": "北京今天天气怎么样？"}],
-    "tools": [{
-      "type": "function",
-      "function": {
-        "name": "get_weather",
-        "description": "获取指定城市的天气",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "city": {"type": "string", "description": "城市名称"}
-          },
-          "required": ["city"]
-        }
-      }
-    }]
-  }'
-```
-
-### Python SDK
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://127.0.0.1:8787/v1",
-    api_key="sk-free-api"
-)
-
-response = client.chat.completions.create(
-    model="free-api",
-    messages=[{"role": "user", "content": "你好"}]
-)
-print(response.choices[0].message.content)
-```
-
-## 局域网访问
-
-如需让其他设备访问，将 `127.0.0.1` 替换为手机的局域网 IP：
-
-```text
-http://手机IP:8787/v1/chat/completions
-```
-
-## 可用模型
-
-| 模型名 | 说明 |
-|--------|------|
-| `free-api` | 默认模型 |
-| `gemini-pro` | Gemini Pro 别名 |
-| `gemini-1.5-pro` | Gemini 1.5 Pro 别名 |
-| `gemini-1.5-flash` | Gemini 1.5 Flash 别名 |
-| `gpt-4o` | 兼容性别名 |
-| `gpt-4o-mini` | 兼容性别名 |
-| `deepseek-chat` | 兼容性别名 |
-
-所有模型均映射到同一上游 API（Google Gemini 后端）。
+2. 安装并打开应用
+3. 直接输入消息聊天
+4. 点击右上角齿轮可设置人格、助手名称、上下文轮数和时间注入
+5. 点击右上角壁纸按钮可从相册选择聊天背景
 
 ## 技术架构
 
-- **NanoHTTPD**：本地 HTTP 服务器
 - **OkHttp**：上游 API 请求
-- **提示词注入**：工具定义注入到 system 消息
-- **标签解析**：`<tool_call>` 标签解析为 OpenAI tool_calls 格式
+- **原生 SSE 解析**：兼容上游 `data:` 无空格、无 `[DONE]` 的非标准 SSE
 - **广告过滤**：正则匹配移除上游广告内容
+- **轻量 Prompt Builder**：人格 + 当前时间 + 最近上下文 + 当前消息
+- **原生 View UI**：单 Activity 程序化布局，无 Compose 依赖
+- **MeshGradientView**：Canvas 实现动态渐变背景
 
 ## 构建
 

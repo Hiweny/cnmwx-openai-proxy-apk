@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "公益 API OpenAI 代理"
+rootProject.name = "公益聊天"
 include ":app"

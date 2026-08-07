@@ -39,13 +39,13 @@ jobs:
       - name: Rename APK
         run: |
           mkdir -p release
-          cp app/build/outputs/apk/debug/app-debug.apk release/cnmwx-openai-proxy.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release/cnmwx-native-chat.apk
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cnmwx-openai-proxy-apk
-          path: release/cnmwx-openai-proxy.apk
+          name: cnmwx-native-chat-apk
+          path: release/cnmwx-native-chat.apk
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -53,6 +53,7 @@ jobs:
           tag_name: apk-${{ github.run_number }}
           name: APK Build ${{ github.run_number }}
           body: |
-            自动构建的公益 API OpenAI 兼容代理 APK。
-            安装后打开应用，点击“启动代理”，默认地址为 http://127.0.0.1:8787/v1/chat/completions
-          files: release/cnmwx-openai-proxy.apk
+              自动构建的公益聊天 APK。
+              v3.0 已改为直接调用公益接口的前端聊天应用，不再运行本地 OpenAI 代理或后台服务。
+              支持流式聊天、停止生成、自定义人格、时间注入、壁纸设置和广告过滤。
+            files: release/cnmwx-native-chat.apk

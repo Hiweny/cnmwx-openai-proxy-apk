@@ -1,497 +1,549 @@
 package com.hiweny.freeapiopenai;
 
-import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.text.method.ScrollingMovementMethod;
+import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import org.json.JSONObject;
-
-import java.util.concurrent.TimeUnit;
-
-import okhttp3.MediaType;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.RequestBody;
-import okhttp3.Response;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.Locale;
 
 /**
- * Main activity with dark mode Material Design UI.
- * Provides controls for the proxy service and displays configuration info.
+ * 直接调用公益接口的聊天应用。
+ * 不再启动本地代理，不再注入 OpenAI 工具调用提示词，减少提示词污染。
  */
 public class MainActivity extends Activity {
+    private static final int REQ_WALLPAPER = 2001;
 
-    private static final int PORT = 8787;
-    private static final String BASE_URL = "http://127.0.0.1:" + PORT + "/v1";
-    private static final String ENDPOINT = BASE_URL + "/chat/completions";
-    private static final String API_KEY = "sk-free-api";
-    private static final String MODEL_LIST = "free-api, gemini-pro, gemini-1.5-pro, gemini-1.5-flash, gemini-flash, gpt-4o, gpt-4o-mini, deepseek-chat";
+    private static final int C_TEXT = Color.parseColor("#F8FAFC");
+    private static final int C_TEXT_SOFT = Color.parseColor("#CBD5E1");
+    private static final int C_TEXT_MUTED = Color.parseColor("#94A3B8");
+    private static final int C_CARD = Color.argb(190, 15, 23, 42);
+    private static final int C_INPUT = Color.argb(230, 30, 41, 59);
+    private static final int C_USER = Color.parseColor("#2563EB");
+    private static final int C_ASSISTANT = Color.argb(220, 30, 41, 59);
+    private static final int C_ACCENT = Color.parseColor("#38BDF8");
+    private static final int C_DANGER = Color.parseColor("#F87171");
 
-    // Dark theme colors
-    private static final int C_BG = Color.parseColor("#0F172A");
-    private static final int C_BG_CARD = Color.parseColor("#1E293B");
-    private static final int C_BG_INPUT = Color.parseColor("#334155");
-    private static final int C_TEXT = Color.parseColor("#F1F5F9");
-    private static final int C_TEXT_SEC = Color.parseColor("#94A3B8");
-    private static final int C_TEXT_MUTE = Color.parseColor("#64748B");
-    private static final int C_BLUE = Color.parseColor("#3B82F6");
-    private static final int C_GREEN = Color.parseColor("#22C55E");
-    private static final int C_RED = Color.parseColor("#EF4444");
-    private static final int C_BORDER = Color.parseColor("#334155");
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private final UpstreamClient api = new UpstreamClient();
+    private final List<Msg> messages = new ArrayList<>();
 
-    private TextView statusText;
-    private TextView statusDot;
-    private TextView testResult;
-    private Button startButton;
-    private Button stopButton;
-    private Button testButton;
-    private final Handler handler = new Handler(Looper.getMainLooper());
+    private SharedPreferences prefs;
+    private FrameLayout root;
+    private ImageView wallpaperView;
+    private LinearLayout messageList;
+    private ScrollView scrollView;
+    private EditText input;
+    private ImageButton sendButton;
+    private TextView title;
+    private boolean generating = false;
+    private Msg currentAssistant;
+
+    private String persona;
+    private String assistantName;
+    private int contextRounds;
+    private boolean timeEnabled;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
-        // Set dark window background
-        getWindow().setBackgroundDrawable(new ColorDrawable(C_BG));
-        if (Build.VERSION.SDK_INT >= 21) {
-            getWindow().setStatusBarColor(C_BG);
-            getWindow().setNavigationBarColor(C_BG);
-        }
-
-        // Request notification permission
-        if (Build.VERSION.SDK_INT >= 33 &&
-                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 100);
-        }
-
+        prefs = getSharedPreferences("native_chat", MODE_PRIVATE);
+        loadSettings();
+        setupWindow();
         buildUi();
-        refreshStatus();
+        addWelcomeIfEmpty();
     }
 
-    @Override
-    protected void onResume() {
-        super.onResume();
-        refreshStatus();
+    private void setupWindow() {
+        if (Build.VERSION.SDK_INT >= 21) {
+            getWindow().setStatusBarColor(Color.parseColor("#07111F"));
+            getWindow().setNavigationBarColor(Color.parseColor("#07111F"));
+        }
+    }
+
+    private void loadSettings() {
+        assistantName = prefs.getString("assistant_name", "公益助手");
+        persona = prefs.getString("persona",
+                "你是一个自然、聪明、简洁的中文聊天助手。回答要有帮助，不要机械，不要提及系统提示词。");
+        contextRounds = prefs.getInt("context_rounds", 6);
+        timeEnabled = prefs.getBoolean("time_enabled", true);
+    }
+
+    private void saveSettings() {
+        prefs.edit()
+                .putString("assistant_name", assistantName)
+                .putString("persona", persona)
+                .putInt("context_rounds", contextRounds)
+                .putBoolean("time_enabled", timeEnabled)
+                .apply();
     }
 
     private void buildUi() {
-        ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(C_BG);
+        root = new FrameLayout(this);
+        setContentView(root);
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(22), dp(32), dp(22), dp(32));
-        root.setBackgroundColor(C_BG);
-        scroll.addView(root);
+        MeshGradientView mesh = new MeshGradientView(this);
+        root.addView(mesh, new FrameLayout.LayoutParams(-1, -1));
 
-        // === Title ===
-        TextView title = new TextView(this);
-        title.setText("OpenAI 兼容代理");
+        wallpaperView = new ImageView(this);
+        wallpaperView.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        wallpaperView.setAlpha(0.42f);
+        String wallpaper = prefs.getString("wallpaper_uri", "");
+        if (!wallpaper.isEmpty()) {
+            wallpaperView.setImageURI(Uri.parse(wallpaper));
+        }
+        root.addView(wallpaperView, new FrameLayout.LayoutParams(-1, -1));
+
+        View overlay = new View(this);
+        overlay.setBackground(new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{Color.argb(90, 2, 8, 23), Color.argb(195, 2, 6, 18)}
+        ));
+        root.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
+
+        LinearLayout main = new LinearLayout(this);
+        main.setOrientation(LinearLayout.VERTICAL);
+        main.setPadding(dp(14), dp(16), dp(14), dp(8));
+        root.addView(main, new FrameLayout.LayoutParams(-1, -1));
+
+        main.addView(topBar());
+
+        scrollView = new ScrollView(this);
+        messageList = new LinearLayout(this);
+        messageList.setOrientation(LinearLayout.VERTICAL);
+        messageList.setPadding(0, dp(10), 0, dp(12));
+        scrollView.addView(messageList, new ScrollView.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(-1, 0, 1f);
+        main.addView(scrollView, scrollLp);
+
+        main.addView(inputBar());
+    }
+
+    private View topBar() {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(14), dp(10), dp(10), dp(10));
+        bar.setBackground(round(C_CARD, dp(22)));
+
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams textsLp = new LinearLayout.LayoutParams(0, -2, 1f);
+        bar.addView(texts, textsLp);
+
+        title = new TextView(this);
+        title.setText(assistantName);
         title.setTextColor(C_TEXT);
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 28);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        root.addView(title);
+        texts.addView(title);
 
-        TextView subtitle = new TextView(this);
-        subtitle.setText("在手机本机启动 OpenAI 兼容接口，自动隐藏广告，支持工具调用、流式响应和多模型别名。");
-        subtitle.setTextColor(C_TEXT_SEC);
-        subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        subtitle.setLineSpacing(dp(2), 1.2f);
-        LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(-1, -2);
-        subLp.setMargins(0, dp(8), 0, dp(24));
-        subtitle.setLayoutParams(subLp);
-        root.addView(subtitle);
+        TextView sub = new TextView(this);
+        sub.setText("直连公益接口 · 流式回复 · 轻提示词");
+        sub.setTextColor(C_TEXT_MUTED);
+        sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        texts.addView(sub);
 
-        // === Status Card ===
-        LinearLayout statusCard = card();
-        LinearLayout statusHeader = new LinearLayout(this);
-        statusHeader.setOrientation(LinearLayout.HORIZONTAL);
-        statusHeader.setGravity(Gravity.CENTER_VERTICAL);
+        ImageButton clear = iconButton("↺");
+        clear.setOnClickListener(v -> confirmClear());
+        bar.addView(clear);
 
-        statusDot = new TextView(this);
-        statusDot.setText("\u25CF");
-        statusDot.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        statusDot.setTextColor(C_TEXT_MUTE);
-        statusHeader.addView(statusDot);
+        ImageButton wallpaper = iconButton("▧");
+        wallpaper.setOnClickListener(v -> pickWallpaper());
+        bar.addView(wallpaper);
 
-        TextView statusLabel = new TextView(this);
-        statusLabel.setText("  服务状态");
-        statusLabel.setTextColor(C_TEXT);
-        statusLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        statusLabel.setTypeface(Typeface.DEFAULT_BOLD);
-        statusHeader.addView(statusLabel);
-        statusCard.addView(statusHeader);
+        ImageButton settings = iconButton("⚙");
+        settings.setOnClickListener(v -> showSettings());
+        bar.addView(settings);
 
-        statusText = new TextView(this);
-        statusText.setTextColor(C_TEXT_SEC);
-        statusText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        statusText.setLineSpacing(dp(2), 1.2f);
-        LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(-1, -2);
-        stLp.setMargins(0, dp(10), 0, 0);
-        statusText.setLayoutParams(stLp);
-        statusCard.addView(statusText);
-        root.addView(statusCard);
-
-        // === Buttons ===
-        LinearLayout btnRow = new LinearLayout(this);
-        btnRow.setOrientation(LinearLayout.HORIZONTAL);
-        btnRow.setWeightSum(2f);
-        LinearLayout.LayoutParams btnRowLp = new LinearLayout.LayoutParams(-1, -2);
-        btnRowLp.setMargins(0, dp(16), 0, dp(16));
-        btnRow.setLayoutParams(btnRowLp);
-
-        startButton = primaryButton("启动代理");
-        startButton.setOnClickListener(v -> startProxy());
-        LinearLayout.LayoutParams startLp = new LinearLayout.LayoutParams(0, dp(50), 1f);
-        startLp.setMargins(0, 0, dp(6), 0);
-        startButton.setLayoutParams(startLp);
-        btnRow.addView(startButton);
-
-        stopButton = secondaryButton("停止代理");
-        stopButton.setOnClickListener(v -> stopProxy());
-        LinearLayout.LayoutParams stopLp = new LinearLayout.LayoutParams(0, dp(50), 1f);
-        stopLp.setMargins(dp(6), 0, 0, 0);
-        stopButton.setLayoutParams(stopLp);
-        btnRow.addView(stopButton);
-        root.addView(btnRow);
-
-        // === Endpoint Card ===
-        root.addView(infoCard("接口地址 (Base URL)", BASE_URL, "复制 Base URL"));
-
-        // === Endpoint Full ===
-        root.addView(infoCard("完整接口", ENDPOINT, "复制完整接口"));
-
-        // === API Key Card ===
-        root.addView(infoCard("API Key", API_KEY + "\n(任意 Key 均可，留空也行)", "复制 API Key"));
-
-        // === Models Card ===
-        root.addView(infoCard("可用模型", MODEL_LIST, "复制模型列表"));
-
-        // === Test Button ===
-        testButton = outlineButton("测试连接");
-        testButton.setOnClickListener(v -> testConnection());
-        root.addView(testButton);
-
-        // === Test Result ===
-        LinearLayout testCard = card();
-        TextView testLabel = new TextView(this);
-        testLabel.setText("测试结果");
-        testLabel.setTextColor(C_TEXT);
-        testLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        testLabel.setTypeface(Typeface.DEFAULT_BOLD);
-        testCard.addView(testLabel);
-
-        testResult = new TextView(this);
-        testResult.setText("点击上方按钮测试连接...");
-        testResult.setTextColor(C_TEXT_SEC);
-        testResult.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        testResult.setMovementMethod(new ScrollingMovementMethod());
-        testResult.setMinHeight(dp(80));
-        testResult.setMaxHeight(dp(200));
-        LinearLayout.LayoutParams trLp = new LinearLayout.LayoutParams(-1, -2);
-        trLp.setMargins(0, dp(8), 0, 0);
-        testResult.setLayoutParams(trLp);
-        testCard.addView(testResult);
-        root.addView(testCard);
-
-        // === Python SDK Config ===
-        String pyConfig = "from openai import OpenAI\n\n"
-                + "client = OpenAI(\n"
-                + "    base_url=\"" + BASE_URL + "\",\n"
-                + "    api_key=\"" + API_KEY + "\"\n"
-                + ")\n\n"
-                + "response = client.chat.completions.create(\n"
-                + "    model=\"free-api\",\n"
-                + "    messages=[{\"role\": \"user\", \"content\": \"你好\"}]\n"
-                + ")";
-        root.addView(infoCard("Python SDK 示例", pyConfig, "复制代码"));
-
-        // === Copy All ===
-        Button copyAll = outlineButton("复制全部配置");
-        copyAll.setOnClickListener(v -> {
-            String all = "OpenAI 兼容代理配置\n"
-                    + "Base URL: " + BASE_URL + "\n"
-                    + "Endpoint: " + ENDPOINT + "\n"
-                    + "API Key: " + API_KEY + " (任意 Key 均可)\n"
-                    + "Models: " + MODEL_LIST + "\n"
-                    + "工具调用: 支持\n"
-                    + "流式响应: 支持\n"
-                    + "广告过滤: 已开启";
-            copyToClipboard("配置", all);
-        });
-        root.addView(copyAll);
-
-        // === Health Check Button ===
-        Button health = outlineButton("打开健康检查");
-        health.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("http://127.0.0.1:" + PORT + "/health"))));
-        root.addView(health);
-
-        // === Notes ===
-        TextView note = new TextView(this);
-        note.setText("提示：\n"
-                + "- 如需让其他设备访问，将 127.0.0.1 替换为手机的局域网 IP\n"
-                + "- 支持流式 (stream) 和非流式两种模式\n"
-                + "- 工具调用 (function calling) 通过提示词注入实现\n"
-                + "- 后端模型为 Google Gemini 系列\n"
-                + "- 上游广告已自动过滤");
-        note.setTextColor(C_TEXT_MUTE);
-        note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        note.setLineSpacing(dp(2), 1.3f);
-        LinearLayout.LayoutParams noteLp = new LinearLayout.LayoutParams(-1, -2);
-        noteLp.setMargins(0, dp(20), 0, 0);
-        note.setLayoutParams(noteLp);
-        root.addView(note);
-
-        setContentView(scroll);
-    }
-
-    // === UI Helpers ===
-
-    private LinearLayout card() {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackgroundColor(C_BG_CARD);
-        card.setPadding(dp(18), dp(16), dp(18), dp(16));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.setMargins(0, 0, 0, dp(12));
-        card.setLayoutParams(lp);
-        return card;
+        lp.setMargins(0, 0, 0, dp(8));
+        bar.setLayoutParams(lp);
+        return bar;
     }
 
-    private LinearLayout infoCard(String label, String content, String copyLabel) {
-        LinearLayout card = card();
+    private View inputBar() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.HORIZONTAL);
+        box.setGravity(Gravity.BOTTOM);
+        box.setPadding(dp(12), dp(10), dp(8), dp(10));
+        box.setBackground(round(C_INPUT, dp(24)));
 
-        TextView labelView = new TextView(this);
-        labelView.setText(label);
-        labelView.setTextColor(C_TEXT);
-        labelView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        labelView.setTypeface(Typeface.DEFAULT_BOLD);
-        card.addView(labelView);
+        input = new EditText(this);
+        input.setHint("输入消息...");
+        input.setHintTextColor(Color.parseColor("#64748B"));
+        input.setTextColor(C_TEXT);
+        input.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        input.setMinLines(1);
+        input.setMaxLines(5);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        input.setBackgroundColor(Color.TRANSPARENT);
+        LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(0, -2, 1f);
+        box.addView(input, inputLp);
 
-        TextView contentView = new TextView(this);
-        contentView.setText(content);
-        contentView.setTextColor(C_TEXT_SEC);
-        contentView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        contentView.setTextIsSelectable(true);
-        contentView.setLineSpacing(dp(1), 1.2f);
-        LinearLayout.LayoutParams contentLp = new LinearLayout.LayoutParams(-1, -2);
-        contentLp.setMargins(0, dp(6), 0, dp(8));
-        contentView.setLayoutParams(contentLp);
-        card.addView(contentView);
-
-        Button copyBtn = smallButton(copyLabel);
-        copyBtn.setOnClickListener(v -> {
-            copyToClipboard(label, content);
+        sendButton = iconButton("➤");
+        sendButton.setOnClickListener(v -> {
+            if (generating) stopGeneration();
+            else sendMessage();
         });
-        card.addView(copyBtn);
+        box.addView(sendButton);
 
-        return card;
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, dp(6), 0, 0);
+        box.setLayoutParams(lp);
+        return box;
     }
 
-    private Button primaryButton(String text) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setAllCaps(false);
-        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        b.setTextColor(Color.WHITE);
-        b.setBackgroundColor(C_BLUE);
-        b.setStateListAnimator(null);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(50));
-        lp.setMargins(0, 0, 0, dp(12));
+    private ImageButton iconButton(String text) {
+        ImageButton b = new ImageButton(this);
+        b.setBackground(round(Color.argb(85, 51, 65, 85), dp(18)));
+        b.setImageDrawable(null);
+        b.setContentDescription(text);
+        b.setMinimumWidth(dp(42));
+        b.setMinimumHeight(dp(42));
+        b.setPadding(0, 0, 0, 0);
+        b.setOnLongClickListener(v -> {
+            Toast.makeText(this, text, Toast.LENGTH_SHORT).show();
+            return true;
+        });
+        b.setForeground(null);
+        b.setTag(text);
+        b.post(() -> b.setImageBitmap(TextBitmap.create(text, C_TEXT, dp(22), dp(42), dp(42))));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(42), dp(42));
+        lp.setMargins(dp(6), 0, 0, 0);
         b.setLayoutParams(lp);
-        b.setGravity(Gravity.CENTER);
         return b;
     }
 
-    private Button secondaryButton(String text) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setAllCaps(false);
-        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        b.setTextColor(C_TEXT);
-        b.setBackgroundColor(C_BG_INPUT);
-        b.setStateListAnimator(null);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(50));
-        lp.setMargins(0, 0, 0, dp(12));
-        b.setLayoutParams(lp);
-        b.setGravity(Gravity.CENTER);
-        return b;
-    }
-
-    private Button outlineButton(String text) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setAllCaps(false);
-        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        b.setTextColor(C_BLUE);
-        b.setBackgroundColor(C_BG_CARD);
-        b.setStateListAnimator(null);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(46));
-        lp.setMargins(0, 0, 0, dp(12));
-        b.setLayoutParams(lp);
-        b.setGravity(Gravity.CENTER);
-        return b;
-    }
-
-    private Button smallButton(String text) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setAllCaps(false);
-        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        b.setTextColor(C_TEXT_SEC);
-        b.setBackgroundColor(C_BG_INPUT);
-        b.setStateListAnimator(null);
-        b.setPadding(dp(16), dp(6), dp(16), dp(6));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
-        b.setLayoutParams(lp);
-        b.setGravity(Gravity.CENTER);
-        return b;
-    }
-
-    // === Actions ===
-
-    private void startProxy() {
-        Intent intent = new Intent(this, ProxyService.class);
-        intent.putExtra("port", PORT);
-        if (Build.VERSION.SDK_INT >= 26) {
-            startForegroundService(intent);
-        } else {
-            startService(intent);
+    private void addWelcomeIfEmpty() {
+        if (messages.isEmpty()) {
+            Msg welcome = new Msg(false, "你好，我会直接使用公益接口回答。你可以点右上角设置人格、上下文轮数，也可以设置聊天壁纸。");
+            messages.add(welcome);
+            renderMessages();
         }
-        handler.postDelayed(this::refreshStatus, 1000);
     }
 
-    private void stopProxy() {
-        stopService(new Intent(this, ProxyService.class));
-        handler.postDelayed(this::refreshStatus, 500);
-    }
+    private void sendMessage() {
+        String text = input.getText().toString().trim();
+        if (text.isEmpty()) return;
+        hideKeyboard();
+        input.setText("");
 
-    private void testConnection() {
-        testButton.setEnabled(false);
-        testButton.setText("测试中...");
-        testResult.setText("正在发送测试请求...");
-        testResult.setTextColor(C_TEXT_SEC);
+        Msg user = new Msg(true, text);
+        messages.add(user);
+        currentAssistant = new Msg(false, "");
+        messages.add(currentAssistant);
+        generating = true;
+        updateSendButton();
+        renderMessages();
 
-        new Thread(() -> {
-            try {
-                OkHttpClient client = new OkHttpClient.Builder()
-                        .connectTimeout(10, TimeUnit.SECONDS)
-                        .readTimeout(60, TimeUnit.SECONDS)
-                        .build();
-
-                JSONObject payload = new JSONObject();
-                payload.put("model", "free-api");
-                payload.put("stream", false);
-                org.json.JSONArray messages = new org.json.JSONArray();
-                JSONObject msg = new JSONObject();
-                msg.put("role", "user");
-                msg.put("content", "你好，请用一句话介绍你自己");
-                messages.put(msg);
-                payload.put("messages", messages);
-
-                Request request = new Request.Builder()
-                        .url(ENDPOINT)
-                        .post(RequestBody.create(payload.toString(), MediaType.get("application/json")))
-                        .header("Authorization", "Bearer " + API_KEY)
-                        .build();
-
-                try (Response response = client.newCall(request).execute()) {
-                    String body = response.body() != null ? response.body().string() : "";
-                    if (response.isSuccessful()) {
-                        JSONObject json = new JSONObject(body);
-                        org.json.JSONArray choices = json.optJSONArray("choices");
-                        if (choices != null && choices.length() > 0) {
-                            JSONObject choice = choices.optJSONObject(0);
-                            JSONObject message = choice.optJSONObject("message");
-                            String content = message != null ? message.optString("content", "") : "";
-                            handler.post(() -> {
-                                testResult.setText("连接成功!\n\n模型回复:\n" + content);
-                                testResult.setTextColor(C_GREEN);
-                            });
-                        } else {
-                            handler.post(() -> {
-                                testResult.setText("连接成功，但响应格式异常:\n" + body.substring(0, Math.min(body.length(), 500)));
-                                testResult.setTextColor(C_TEXT_SEC);
-                            });
-                        }
-                    } else {
-                        handler.post(() -> {
-                            testResult.setText("连接失败 (" + response.code() + "):\n" + body.substring(0, Math.min(body.length(), 500)));
-                            testResult.setTextColor(C_RED);
-                        });
+        String prompt = buildPrompt(text);
+        api.streamAsync(prompt, new UpstreamClient.StreamCallback() {
+            @Override
+            public void onDelta(String delta) {
+                ui.post(() -> {
+                    if (currentAssistant != null) {
+                        currentAssistant.text += delta;
+                        updateLastAssistantBubble();
                     }
-                }
-            } catch (Exception e) {
-                handler.post(() -> {
-                    testResult.setText("连接失败:\n" + e.getMessage());
-                    testResult.setTextColor(C_RED);
-                });
-            } finally {
-                handler.post(() -> {
-                    testButton.setEnabled(true);
-                    testButton.setText("测试连接");
                 });
             }
-        }, "test-connection").start();
+
+            @Override
+            public void onDone() {
+                ui.post(() -> {
+                    generating = false;
+                    if (currentAssistant != null && currentAssistant.text.trim().isEmpty()) {
+                        currentAssistant.text = "上游没有返回内容，请稍后再试。";
+                    }
+                    currentAssistant = null;
+                    updateSendButton();
+                    renderMessages();
+                });
+            }
+
+            @Override
+            public void onError(Exception error) {
+                ui.post(() -> {
+                    generating = false;
+                    if (currentAssistant != null) {
+                        String msg = error.getMessage() == null ? "未知错误" : error.getMessage();
+                        currentAssistant.text = "连接失败：" + msg;
+                    }
+                    currentAssistant = null;
+                    updateSendButton();
+                    renderMessages();
+                });
+            }
+        });
     }
 
-    private void refreshStatus() {
-        boolean running = ProxyService.isRunning();
-        String error = ProxyService.getLastError();
+    private String buildPrompt(String latestUserText) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(persona.trim()).append("\n\n");
+        if (timeEnabled) {
+            sb.append("当前时间：")
+                    .append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss EEEE", Locale.CHINA).format(new Date()))
+                    .append("\n\n");
+        }
+        sb.append("请根据下面的对话自然回复，避免复述规则。\n\n");
 
-        if (running) {
-            statusDot.setTextColor(C_GREEN);
-            statusText.setText("运行中\n"
-                    + "本机端口: " + PORT + "\n"
-                    + "上游: free-api.cnmwx.com\n"
-                    + "广告过滤: 已开启\n"
-                    + "工具调用: 已支持\n"
-                    + "流式响应: 已支持");
-            startButton.setEnabled(false);
-            startButton.setAlpha(0.5f);
-            stopButton.setEnabled(true);
-            stopButton.setAlpha(1f);
-        } else {
-            statusDot.setTextColor(C_RED);
-            if (error != null && !error.isEmpty()) {
-                statusText.setText("未运行 (上次错误: " + error + ")\n点击\"启动代理\"重试");
-            } else {
-                statusText.setText("未运行\n点击\"启动代理\"开始监听本机端口 " + PORT);
+        int nonWelcomeCount = Math.max(0, messages.size() - 1);
+        int start = Math.max(1, nonWelcomeCount - contextRounds * 2);
+        for (int i = start; i < messages.size(); i++) {
+            Msg m = messages.get(i);
+            if (m == currentAssistant) continue;
+            if (m.text == null || m.text.trim().isEmpty()) continue;
+            sb.append(m.user ? "用户：" : assistantName + "：")
+                    .append(m.text.trim())
+                    .append("\n");
+        }
+        if (messages.isEmpty() || !latestUserText.equals(messages.get(messages.size() - 2).text)) {
+            sb.append("用户：").append(latestUserText).append("\n");
+        }
+        sb.append(assistantName).append("：");
+        return sb.toString();
+    }
+
+    private void stopGeneration() {
+        api.cancel();
+        generating = false;
+        if (currentAssistant != null && currentAssistant.text.trim().isEmpty()) {
+            currentAssistant.text = "已停止生成。";
+        }
+        currentAssistant = null;
+        updateSendButton();
+        renderMessages();
+    }
+
+    private void updateSendButton() {
+        sendButton.post(() -> sendButton.setImageBitmap(TextBitmap.create(generating ? "■" : "➤",
+                generating ? C_DANGER : C_TEXT, dp(20), dp(42), dp(42))));
+    }
+
+    private void renderMessages() {
+        messageList.removeAllViews();
+        for (Msg msg : messages) {
+            messageList.addView(messageBubble(msg));
+        }
+        scrollBottom();
+    }
+
+    private void updateLastAssistantBubble() {
+        renderMessages();
+    }
+
+    private View messageBubble(Msg msg) {
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setGravity(msg.user ? Gravity.RIGHT : Gravity.LEFT);
+        LinearLayout.LayoutParams wrapLp = new LinearLayout.LayoutParams(-1, -2);
+        wrapLp.setMargins(0, dp(6), 0, dp(6));
+        wrap.setLayoutParams(wrapLp);
+
+        TextView label = new TextView(this);
+        label.setText(msg.user ? "你" : assistantName);
+        label.setTextColor(C_TEXT_MUTED);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        label.setGravity(msg.user ? Gravity.RIGHT : Gravity.LEFT);
+        label.setPadding(dp(6), 0, dp(6), dp(3));
+        wrap.addView(label, new LinearLayout.LayoutParams(-1, -2));
+
+        TextView bubble = new TextView(this);
+        bubble.setText(msg.text == null || msg.text.isEmpty() ? "正在思考..." : msg.text);
+        bubble.setTextColor(C_TEXT);
+        bubble.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        bubble.setLineSpacing(dp(2), 1.18f);
+        bubble.setTextIsSelectable(true);
+        bubble.setPadding(dp(14), dp(10), dp(14), dp(10));
+        bubble.setBackground(round(msg.user ? C_USER : C_ASSISTANT, dp(18)));
+        bubble.setOnLongClickListener(v -> {
+            getSystemService(android.content.ClipboardManager.class)
+                    .setPrimaryClip(ClipData.newPlainText("message", bubble.getText()));
+            Toast.makeText(this, "已复制消息", Toast.LENGTH_SHORT).show();
+            return true;
+        });
+        LinearLayout.LayoutParams bubbleLp = new LinearLayout.LayoutParams(dp(290), -2);
+        bubbleLp.gravity = msg.user ? Gravity.RIGHT : Gravity.LEFT;
+        wrap.addView(bubble, bubbleLp);
+        return wrap;
+    }
+
+    private void showSettings() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(18), dp(10), dp(18), 0);
+
+        EditText nameInput = field("助手名称", assistantName, 1);
+        EditText personaInput = field("自定义人格 / 系统提示词", persona, 8);
+        EditText roundsInput = field("上下文轮数（建议 4-8，太大会变慢）", String.valueOf(contextRounds), 1);
+        roundsInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+
+        Button timeBtn = plainButton(timeEnabled ? "时间注入：开启" : "时间注入：关闭");
+        final boolean[] timeValue = {timeEnabled};
+        timeBtn.setOnClickListener(v -> {
+            timeValue[0] = !timeValue[0];
+            timeBtn.setText(timeValue[0] ? "时间注入：开启" : "时间注入：关闭");
+        });
+
+        box.addView(nameInput);
+        box.addView(personaInput);
+        box.addView(roundsInput);
+        box.addView(timeBtn);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("聊天设置")
+                .setView(box)
+                .setPositiveButton("保存", (d, which) -> {
+                    assistantName = nameInput.getText().toString().trim();
+                    if (assistantName.isEmpty()) assistantName = "公益助手";
+                    persona = personaInput.getText().toString().trim();
+                    if (persona.isEmpty()) persona = "你是一个自然、聪明、简洁的中文聊天助手。";
+                    try {
+                        contextRounds = Math.max(1, Math.min(12, Integer.parseInt(roundsInput.getText().toString().trim())));
+                    } catch (Exception ignored) {
+                        contextRounds = 6;
+                    }
+                    timeEnabled = timeValue[0];
+                    title.setText(assistantName);
+                    saveSettings();
+                    renderMessages();
+                })
+                .setNegativeButton("取消", null)
+                .setNeutralButton("清除壁纸", (d, which) -> {
+                    prefs.edit().remove("wallpaper_uri").apply();
+                    wallpaperView.setImageDrawable(null);
+                })
+                .create();
+        dialog.setOnShowListener(d -> {
+            dialog.getWindow().setBackgroundDrawable(round(Color.parseColor("#111827"), dp(20)));
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(C_ACCENT);
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(C_TEXT_SOFT);
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setTextColor(C_DANGER);
+        });
+        dialog.show();
+    }
+
+    private EditText field(String hint, String value, int lines) {
+        EditText e = new EditText(this);
+        e.setHint(hint);
+        e.setText(value);
+        e.setTextColor(C_TEXT);
+        e.setHintTextColor(C_TEXT_MUTED);
+        e.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        e.setMinLines(lines);
+        e.setMaxLines(Math.max(lines, 8));
+        e.setPadding(dp(12), dp(8), dp(12), dp(8));
+        e.setBackground(round(Color.parseColor("#1F2937"), dp(12)));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, dp(8), 0, dp(8));
+        e.setLayoutParams(lp);
+        return e;
+    }
+
+    private Button plainButton(String text) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setAllCaps(false);
+        b.setTextColor(C_TEXT);
+        b.setBackground(round(Color.parseColor("#1F2937"), dp(12)));
+        return b;
+    }
+
+    private void pickWallpaper() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("image/*");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        startActivityForResult(intent, REQ_WALLPAPER);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_WALLPAPER && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            Uri uri = data.getData();
+            try {
+                getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Exception ignored) {
             }
-            startButton.setEnabled(true);
-            startButton.setAlpha(1f);
-            stopButton.setEnabled(false);
-            stopButton.setAlpha(0.5f);
+            prefs.edit().putString("wallpaper_uri", uri.toString()).apply();
+            wallpaperView.setImageURI(uri);
+            Toast.makeText(this, "壁纸已设置", Toast.LENGTH_SHORT).show();
         }
     }
 
-    private void copyToClipboard(String label, String text) {
-        ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-        cm.setPrimaryClip(ClipData.newPlainText(label, text));
-        Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show();
+    private void confirmClear() {
+        new AlertDialog.Builder(this)
+                .setTitle("清空当前对话？")
+                .setMessage("清空后会保留设置和壁纸。")
+                .setPositiveButton("清空", (d, w) -> {
+                    api.cancel();
+                    messages.clear();
+                    currentAssistant = null;
+                    generating = false;
+                    updateSendButton();
+                    addWelcomeIfEmpty();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void scrollBottom() {
+        scrollView.postDelayed(() -> scrollView.fullScroll(View.FOCUS_DOWN), 40);
+    }
+
+    private void hideKeyboard() {
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null) imm.hideSoftInputFromWindow(input.getWindowToken(), 0);
+    }
+
+    private GradientDrawable round(int color, int radius) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(color);
+        drawable.setCornerRadius(radius);
+        return drawable;
     }
 
     private int dp(int value) {
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private static class Msg {
+        final boolean user;
+        String text;
+
+        Msg(boolean user, String text) {
+            this.user = user;
+            this.text = text;
+        }
     }
 }
