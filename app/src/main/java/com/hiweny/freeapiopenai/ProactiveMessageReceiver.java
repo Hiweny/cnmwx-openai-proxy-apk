@@ -48,7 +48,7 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
     static void schedule(Context context) {
         SharedPreferences prefs = context.getSharedPreferences("wechat_native_state", Context.MODE_PRIVATE);
         if (!prefs.getBoolean("proactiveEnabled", false)) return;
-        int minutes = Math.max(5, prefs.getInt("proactiveIntervalMinutes", 30));
+        int minutes = Math.max(1, prefs.getInt("proactiveIntervalMinutes", 30));
         AlarmManager alarm = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         if (alarm == null) return;
         PendingIntent pi = pendingIntent(context);
@@ -70,7 +70,7 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
         if (Build.VERSION.SDK_INT < 26) return;
         NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm == null || nm.getNotificationChannel(CHANNEL_ID) != null) return;
-        NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "主动消息", NotificationManager.IMPORTANCE_DEFAULT);
+        NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "主动消息", NotificationManager.IMPORTANCE_HIGH);
         channel.setDescription("不同人设根据上下文主动发来的消息");
         channel.enableLights(true);
         channel.setLightColor(Color.rgb(7, 193, 96));
@@ -91,7 +91,7 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
         try {
             List<Persona> personas = loadPersonas(prefs);
             if (personas.isEmpty()) return;
-            int minutes = Math.max(5, prefs.getInt("proactiveIntervalMinutes", 30));
+            int minutes = Math.max(1, prefs.getInt("proactiveIntervalMinutes", 30));
             long now = System.currentTimeMillis();
             Persona target = chooseTarget(personas, now, minutes);
             if (target == null) return;
@@ -104,7 +104,7 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
             target.lastMessageTime = now;
             target.lastProactiveTime = now;
             savePersonas(prefs, personas);
-            notifyUser(context, target, finalText);
+            notifyNow(context, target, finalText);
         } catch (Exception ignored) {
         } finally {
             schedule(context);
@@ -129,7 +129,7 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
     private Persona chooseTarget(List<Persona> personas, long now, int minutes) {
         Persona best = null;
         long bestIdle = 0;
-        long minGap = Math.max(5, minutes) * 60_000L;
+        long minGap = Math.max(1, minutes) * 60_000L;
         for (Persona p : personas) {
             long lastUser = p.lastUserMessageTime > 0 ? p.lastUserMessageTime : p.lastMessageTime;
             long idle = now - lastUser;
@@ -146,7 +146,10 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
     private String generateProactiveMessage(SharedPreferences prefs, Persona p, long now) throws Exception {
         String userName = prefs.getString("userName", "我");
         StringBuilder sb = new StringBuilder();
-        sb.append(p.prompt == null ? "" : p.prompt.trim()).append("\n\n");
+        sb.append("# 身份边界\n")
+                .append("你现在扮演「").append(p.name).append("」。用户是「").append(userName).append("」。\n")
+                .append("你只能输出「").append(p.name).append("」主动发给用户的消息正文。不要替用户说话，不要输出任何说话人前缀，不要写旁白或规则解释。\n\n")
+                .append(p.prompt == null ? "" : p.prompt.trim()).append("\n\n");
         sb.append("当前时间：")
                 .append(new SimpleDateFormat("yyyy年M月d日 HH:mm EEEE", Locale.CHINA).format(new Date(now)))
                 .append("\n");
@@ -162,14 +165,16 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
         }
         sb.append("\n现在用户已经有一段时间没发消息。请判断你是否应该主动发一条自然消息。")
                 .append("如果不适合主动发消息，只回复 [skip]。")
-                .append("如果适合，请以").append(p.name).append("的身份直接发一条很短的微信式消息，")
-                .append("1-2句，必要时用反斜线 \\ 拆分气泡，不要解释。");
+                .append("如果适合，请直接发一条很短的微信式消息，")
+                .append("1-2句，必要时用单个反斜线 \\ 拆分气泡，不要解释，不要输出名字前缀。")
+                .append("\n直接从消息正文开始输出：");
         String result = new UpstreamClient().complete(sb.toString()).trim();
         if (result.contains("[skip]")) return "";
         return result;
     }
 
-    private void notifyUser(Context context, Persona p, String text) {
+    static void notifyNow(Context context, Persona p, String text) {
+        if (context == null || p == null || text == null || text.trim().isEmpty()) return;
         ensureChannel(context);
         Intent open = new Intent(context, MainActivity.class);
         open.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -185,7 +190,9 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
                 .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setContentIntent(contentIntent)
                 .setAutoCancel(true)
-                .setShowWhen(true);
+                .setShowWhen(true)
+                .setCategory(Notification.CATEGORY_MESSAGE)
+                .setPriority(Notification.PRIORITY_HIGH);
         NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         try {
             if (nm != null) nm.notify(NOTIFY_ID, builder.build());

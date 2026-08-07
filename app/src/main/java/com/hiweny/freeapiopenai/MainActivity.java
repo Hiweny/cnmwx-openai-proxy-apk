@@ -56,7 +56,7 @@ public class MainActivity extends Activity {
 
     private static final int C_GREEN = Color.parseColor("#07C160");
     private static final int C_RED = Color.parseColor("#EF4444");
-    private static final String SPLIT_RULE = "\n# 气泡分割\n如果回复包含多个短句，必须优先使用反斜线 \\ 分隔，每段会显示成独立聊天气泡。每个气泡尽量控制在1-2个短句，不要每次都写很长一整段。";
+    private static final String SPLIT_RULE = "\n# 气泡分割\n如果回复包含多个短句，可以用单个反斜线 \\ 分隔多个气泡；分隔符只是给程序看的，最终界面不会显示。每个气泡尽量控制在1-2个短句，不要每次都写很长一整段。禁止输出说话人名字、角色名前缀、旁白或规则说明。";
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final UpstreamClient api = new UpstreamClient();
@@ -76,6 +76,7 @@ public class MainActivity extends Activity {
     private TextView currentAssistantTextView;
     private long lastStreamRenderAt = 0L;
     private boolean streamRenderPending = false;
+    private StringBuilder currentAssistantBuffer;
 
     private String activePersonaId = "xiaomei";
     private String userName = "我";
@@ -144,9 +145,9 @@ public class MainActivity extends Activity {
         }
         if (personas.isEmpty()) {
             personas.add(Persona.defaults("xiaomei", "小美",
-                    "# 任务\n你需要扮演指定角色，根据角色经历与关系，模拟微信里的日常聊天。\n# 角色\n你是19岁的女生，大一，文学院学生，刚与对方开始交往。\n# 性格\n热情多话，调皮活泼，爱开玩笑，也很体贴。\n# 规则\n回复尽量短，像真实微信聊天。" + SPLIT_RULE));
+                    "# 任务\n你只扮演聊天对象「小美」，根据角色经历与关系，模拟微信里的日常聊天。\n# 角色\n你是19岁的女生，大一，文学院学生，刚与对方开始交往。\n# 性格\n热情多话，调皮活泼，爱开玩笑，也很体贴。\n# 对话边界\n用户说的话只作为上下文，你不能替用户说话，也不能编造用户的新发言。\n# 回复风格\n回复尽量短，像真实微信聊天，直接给出小美要发送的内容。" + SPLIT_RULE));
             personas.add(Persona.defaults("xiaoshuai", "小帅",
-                    "# 任务\n你需要扮演指定角色，根据角色经历与关系，模拟微信里的日常聊天。\n# 角色\n你是23岁的男生，大三，计算机学院学生。\n# 性格\n温和沉稳，话不多但很贴心，会照顾对方情绪。\n# 规则\n回复尽量短，像真实微信聊天。" + SPLIT_RULE));
+                    "# 任务\n你只扮演聊天对象「小帅」，根据角色经历与关系，模拟微信里的日常聊天。\n# 角色\n你是23岁的男生，大三，计算机学院学生。\n# 性格\n温和沉稳，话不多但很贴心，会照顾对方情绪。\n# 对话边界\n用户说的话只作为上下文，你不能替用户说话，也不能编造用户的新发言。\n# 回复风格\n回复尽量短，像真实微信聊天，直接给出小帅要发送的内容。" + SPLIT_RULE));
             activePersonaId = "xiaomei";
             saveState();
         }
@@ -276,15 +277,6 @@ public class MainActivity extends Activity {
         wrap.setPadding(dp(9), dp(9), dp(9), dp(9));
         wrap.setBackground(roundStroke(theme.headerBg, dp(20), dp(1), subtleBorder()));
 
-        Button tickle = new Button(this);
-        tickle.setText("拍");
-        tickle.setAllCaps(false);
-        tickle.setTextColor(theme.textPrimary);
-        tickle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        tickle.setBackground(roundStroke(theme.inputBg, dp(theme.inputRadius), dp(1), theme.inputBorder));
-        tickle.setOnClickListener(v -> handleTickle());
-        wrap.addView(tickle, new LinearLayout.LayoutParams(dp(42), dp(42)));
-
         input = new EditText(this);
         input.setMinLines(1);
         input.setMaxLines(5);
@@ -406,7 +398,7 @@ public class MainActivity extends Activity {
         Button add = listButton("＋ 新建人设");
         add.setOnClickListener(v -> {
             Persona p = Persona.defaults(UUID.randomUUID().toString(), "新朋友",
-                    "# 任务\n你需要扮演一个真实聊天对象，像微信聊天一样自然回复。\n# 规则\n回复简短，必要时用反斜线 \\ 分隔多条气泡。" + SPLIT_RULE);
+                    "# 任务\n你只扮演这个聊天对象本人，像微信聊天一样自然回复。\n# 对话边界\n用户说的话只作为上下文，你不能替用户说话，也不能输出任何说话人前缀。\n# 回复风格\n回复简短，直接输出这个聊天对象要发送的内容。" + SPLIT_RULE);
             personas.add(p);
             activePersonaId = p.id;
             saveState();
@@ -520,6 +512,18 @@ public class MainActivity extends Activity {
             requestBatteryOptimizationIgnore();
             ProactiveMessageReceiver.ensureChannel(this);
         });
+        Button testNotify = listButton("立即测试主动消息通知");
+        testNotify.setOnClickListener(v -> {
+            Persona p = findActivePersona();
+            requestNotificationPermission();
+            ProactiveMessageReceiver.ensureChannel(this);
+            if (!hasNotificationPermission()) {
+                Toast.makeText(this, "请先允许通知权限，再点一次测试", Toast.LENGTH_LONG).show();
+                return;
+            }
+            if (p != null) ProactiveMessageReceiver.notifyNow(this, p, "这是一条主动消息通知测试。看到这条弹窗，就说明主动消息通知通道正常。");
+            Toast.makeText(this, "测试通知已发送", Toast.LENGTH_SHORT).show();
+        });
         Button myAvatar = listButton("设置我的头像");
         myAvatar.setOnClickListener(v -> pickImage(REQ_USER_AVATAR));
         Button wall = listButton("设置聊天背景");
@@ -529,7 +533,7 @@ public class MainActivity extends Activity {
             userName = safe(name.getText().toString(), "我");
             talkCount = clamp(parseInt(context.getText().toString(), 10), 1, 30);
             memoryThreshold = clamp(parseInt(threshold.getText().toString(), 30), 8, 200);
-            proactiveIntervalMinutes = clamp(parseInt(proactiveInterval.getText().toString(), 30), 5, 180);
+            proactiveIntervalMinutes = clamp(parseInt(proactiveInterval.getText().toString(), 30), 1, 180);
             autoMemory = autoValue[0];
             timeInject = timeValue[0];
             proactiveEnabled = proactiveValue[0];
@@ -545,14 +549,19 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "设置已保存", Toast.LENGTH_SHORT).show();
         });
         sideContent.addView(name);
+        sideContent.addView(sidebarText("我的昵称：用于写入 Prompt，让 AI 明确“用户是谁”，避免把双方说话搞混。"));
         sideContent.addView(context);
+        sideContent.addView(sidebarText("上下文轮数：每次回复最多带入最近多少轮对话。越大越懂上下文，但回复会更慢。建议 8-12。"));
         sideContent.addView(threshold);
+        sideContent.addView(sidebarText("自动整理阈值：累计多少条临时聊天后整理为长期记忆。越小越频繁，建议 30。"));
         sideContent.addView(proactiveInterval);
+        sideContent.addView(sidebarText("主动消息心跳：开启后按这个间隔检查一次。到了时间后，应用会在后台挑一个最久没聊的人设，让 TA 生成一条短消息，写入聊天记录，并通过系统通知弹窗提醒你。安卓会受通知权限、电池优化和厂商后台限制影响；点“申请通知权限 / 后台保活”后，再点“立即测试主动消息通知”可以马上确认弹窗是否正常。"));
         sideContent.addView(auto);
         sideContent.addView(time);
         sideContent.addView(proactive);
         sideContent.addView(themeBtn);
         sideContent.addView(notify);
+        sideContent.addView(testNotify);
         sideContent.addView(myAvatar);
         sideContent.addView(wall);
         sideContent.addView(save);
@@ -593,7 +602,7 @@ public class MainActivity extends Activity {
 
         View avatar = avatarView(msg.user ? userName : persona.name, msg.user ? userAvatarUri : persona.avatarUri);
         TextView bubble = new TextView(this);
-        bubble.setText(msg.loading && msg.text.trim().isEmpty() ? "..." : msg.text);
+        bubble.setText(msg == currentAssistant ? MessageParser.preview(msg.text) : msg.text);
         bubble.setTextColor(msg.user ? theme.bubbleUserText : theme.bubbleAiText);
         bubble.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         bubble.setLineSpacing(dp(2), 1.18f);
@@ -661,7 +670,6 @@ public class MainActivity extends Activity {
             tv.setBackground(round(isUserAvatar ? theme.avatarUser : theme.avatarAi, dp(theme.avatarRadius)));
             box.addView(tv, new FrameLayout.LayoutParams(-1, -1));
         }
-        box.setOnClickListener(v -> handleTickle());
         box.setOnLongClickListener(v -> {
             Persona p = findActivePersona();
             if (p != null && !isUserAvatar) showPersonaProfile(p);
@@ -682,53 +690,75 @@ public class MainActivity extends Activity {
         addTempLog(p, "user", text);
         p.lastUserMessageTime = System.currentTimeMillis();
 
-        currentAssistant = new ChatMessage(false, "");
+        currentAssistant = new ChatMessage(false, "正在连接...");
         currentAssistant.loading = true;
+        currentAssistantBuffer = new StringBuilder();
         p.messages.add(currentAssistant);
         p.lastMessageTime = System.currentTimeMillis();
         generating = true;
         updateSendButton();
-        saveState();
-        renderAll();
+        renderOutgoingMessages(user, currentAssistant);
 
-        String prompt = buildPrompt(p, text);
-        api.streamAsync(prompt, new UpstreamClient.StreamCallback() {
-            @Override
-            public void onDelta(String delta) {
-                ui.post(() -> {
-                    if (currentAssistant != null) {
-                        currentAssistant.text += delta;
-                        scheduleStreamRender();
-                    }
-                });
-            }
+        new Thread(() -> {
+            String prompt = buildPrompt(p, text);
+            api.streamAsync(prompt, new UpstreamClient.StreamCallback() {
+                @Override
+                public void onDelta(String delta) {
+                    ui.post(() -> {
+                        if (currentAssistant != null) {
+                            appendAssistantDelta(delta);
+                            scheduleStreamRender();
+                        }
+                    });
+                }
 
-            @Override
-            public void onDone() {
-                ui.post(() -> finishAssistantResponse(p));
-            }
+                @Override
+                public void onDone() {
+                    ui.post(() -> finishAssistantResponse(p));
+                }
 
-            @Override
-            public void onError(Exception error) {
-                ui.post(() -> {
-                    if (currentAssistant != null) {
-                        currentAssistant.loading = false;
-                        currentAssistant.error = true;
-                        currentAssistant.text = "消息发送失败，稍后再试";
-                    }
-                    currentAssistant = null;
-                    generating = false;
-                    updateSendButton();
-                    saveState();
-                    renderAll();
-                });
-            }
-        });
+                @Override
+                public void onError(Exception error) {
+                    ui.post(() -> {
+                        if (currentAssistant != null) {
+                            currentAssistant.loading = false;
+                            currentAssistant.error = true;
+                            currentAssistant.text = "消息发送失败，稍后再试";
+                        }
+                        currentAssistant = null;
+                        currentAssistantBuffer = null;
+                        generating = false;
+                        updateSendButton();
+                        saveState();
+                        renderAll();
+                    });
+                }
+            });
+        }, "prompt-build-start").start();
+    }
+
+    private void renderOutgoingMessages(ChatMessage user, ChatMessage assistant) {
+        if (messageList == null) {
+            renderAll();
+            return;
+        }
+        if (messageList.getChildCount() == 1 && findActivePersona() != null && findActivePersona().messages.size() <= 2) {
+            messageList.removeAllViews();
+        }
+        messageList.addView(chatBubble(findActivePersona(), user));
+        messageList.addView(chatBubble(findActivePersona(), assistant));
+        scrollBottom();
     }
 
     private String buildPrompt(Persona p, String currentUserText) {
         StringBuilder sb = new StringBuilder();
-        sb.append(ensureSplitRule(p.prompt)).append("\n\n");
+        sb.append("# 身份边界\n")
+                .append("你现在扮演「").append(p.name).append("」。\n")
+                .append("用户名字是「").append(userName).append("」。\n")
+                .append("你只能输出「").append(p.name).append("」要发给用户的消息内容，绝对不要代替用户说话，绝对不要输出“")
+                .append(userName).append("：”或“").append(p.name).append("：”这种说话人前缀。\n")
+                .append("用户发言只代表用户已经说过的话，不是让你续写用户台词。不要解释规则，不要写旁白，不要写内心分析。\n\n")
+                .append(ensureSplitRule(p.prompt)).append("\n\n");
         if (timeInject) {
             sb.append("当前时间：")
                     .append(new SimpleDateFormat("yyyy年M月d日 HH:mm EEEE", Locale.CHINA).format(new Date()))
@@ -751,13 +781,19 @@ public class MainActivity extends Activity {
                         .append("\n");
             }
         }
-        sb.append("\n下面是最近聊天记录：\n");
+        sb.append("\n# 最近聊天记录\n");
         List<ChatMessage> history = selectContext(p);
+        ChatMessage currentUserMessage = p.messages.size() >= 2 ? p.messages.get(p.messages.size() - 2) : null;
         for (ChatMessage m : history) {
+            if (m == currentUserMessage) continue;
             sb.append(m.user ? userName : p.name).append("：").append(m.text).append("\n");
         }
-        sb.append(userName).append("：").append(currentUserText).append("\n");
-        sb.append(p.name).append("：");
+        sb.append("\n# 当前用户刚刚发送\n")
+                .append(userName).append("：").append(currentUserText).append("\n\n")
+                .append("# 输出要求\n")
+                .append("只回复").append(p.name).append("接下来要发的一条或多条消息。")
+                .append("如果要拆成多个气泡，用单个反斜线 \\ 分隔，但分隔符不要当成正文。不要输出任何说话人名字，不要续写用户的话。\n")
+                .append("直接从消息正文开始输出：");
         return sb.toString();
     }
 
@@ -775,14 +811,13 @@ public class MainActivity extends Activity {
 
     private void finishAssistantResponse(Persona p) {
         if (currentAssistant == null) return;
+        if (currentAssistantBuffer != null) currentAssistant.text = currentAssistantBuffer.toString();
         String raw = currentAssistant.text == null ? "" : currentAssistant.text.trim();
+        if ("正在连接...".equals(raw)) raw = "";
         MessageParser.Parsed parsed = MessageParser.parse(raw);
         currentAssistant.loading = false;
 
         if (parsed.recall) recallPreviousAi(p);
-        if (parsed.tickle) addTickle(p.name + " 拍了拍你");
-        if (parsed.tickleSelf) addTickle(p.name + " 拍了拍自己");
-
         if (parsed.parts.isEmpty()) {
             currentAssistant.text = "我刚刚走神了，再发一次试试";
         } else {
@@ -800,6 +835,7 @@ public class MainActivity extends Activity {
             addTempLog(p, "ai", joinParts(parsed.parts));
         }
         currentAssistant = null;
+        currentAssistantBuffer = null;
         generating = false;
         updateSendButton();
         saveState();
@@ -812,9 +848,11 @@ public class MainActivity extends Activity {
         api.cancel();
         if (currentAssistant != null) {
             currentAssistant.loading = false;
+            if (currentAssistantBuffer != null) currentAssistant.text = currentAssistantBuffer.toString();
             if (currentAssistant.text.trim().isEmpty()) currentAssistant.text = "已停止";
         }
         currentAssistant = null;
+        currentAssistantBuffer = null;
         generating = false;
         updateSendButton();
         saveState();
@@ -924,35 +962,6 @@ public class MainActivity extends Activity {
                 return;
             }
         }
-    }
-
-    private void handleTickle() {
-        Persona p = findActivePersona();
-        if (p == null || generating) return;
-        addTickle("你 拍了拍 " + p.name);
-        ChatMessage ai = new ChatMessage(false, "");
-        ai.loading = true;
-        p.messages.add(ai);
-        currentAssistant = ai;
-        generating = true;
-        updateSendButton();
-        renderAll();
-        String prompt = ensureSplitRule(p.prompt) + "\n\n当前场景：对方刚刚拍了拍你。请保持角色性格，用1-2句自然短句回应，可以可爱一点，必要时用反斜线 \\ 分隔成多个短气泡。";
-        api.streamAsync(prompt, new UpstreamClient.StreamCallback() {
-            @Override public void onDelta(String delta) { ui.post(() -> { ai.text += delta; scheduleStreamRender(); }); }
-            @Override public void onDone() { ui.post(() -> finishAssistantResponse(p)); }
-            @Override public void onError(Exception error) { ui.post(() -> { ai.loading = false; ai.text = "哎呀，刚刚没反应过来"; currentAssistant = null; generating = false; updateSendButton(); renderAll(); }); }
-        });
-    }
-
-    private void addTickle(String text) {
-        Persona p = findActivePersona();
-        if (p == null) return;
-        ChatMessage m = new ChatMessage(false, text);
-        m.tickle = true;
-        p.messages.add(m);
-        saveState();
-        renderAll();
     }
 
     private void showPersonaList() {
@@ -1121,7 +1130,7 @@ public class MainActivity extends Activity {
                     autoMemory = autoValue[0];
                     timeInject = timeValue[0];
                     proactiveEnabled = proactiveValue[0];
-                    proactiveIntervalMinutes = clamp(parseInt(proactiveInterval.getText().toString(), 30), 5, 180);
+                    proactiveIntervalMinutes = clamp(parseInt(proactiveInterval.getText().toString(), 30), 1, 180);
                     saveState();
                     if (proactiveEnabled) {
                         requestNotificationPermission();
@@ -1181,10 +1190,11 @@ public class MainActivity extends Activity {
 
     private void triggerManualProactive(Persona p) {
         if (p == null || generating) return;
-        ChatMessage ai = new ChatMessage(false, "");
+        ChatMessage ai = new ChatMessage(false, "正在连接...");
         ai.loading = true;
         p.messages.add(ai);
         currentAssistant = ai;
+        currentAssistantBuffer = new StringBuilder();
         generating = true;
         updateSendButton();
         renderAll();
@@ -1192,14 +1202,17 @@ public class MainActivity extends Activity {
         api.streamAsync(prompt, new UpstreamClient.StreamCallback() {
             @Override public void onDelta(String delta) {
                 ui.post(() -> {
-                    ai.text += delta;
+                    appendAssistantDelta(delta);
                     scheduleStreamRender();
                 });
             }
             @Override public void onDone() {
                 ui.post(() -> {
+                    if (currentAssistantBuffer != null) ai.text = currentAssistantBuffer.toString();
+                    String notifyText = MessageParser.preview(ai.text);
                     p.lastProactiveTime = System.currentTimeMillis();
                     finishAssistantResponse(p);
+                    ProactiveMessageReceiver.notifyNow(this, p, notifyText);
                 });
             }
             @Override public void onError(Exception error) {
@@ -1207,6 +1220,7 @@ public class MainActivity extends Activity {
                     ai.loading = false;
                     ai.text = "我本来想主动找你来着，结果卡住了";
                     currentAssistant = null;
+                    currentAssistantBuffer = null;
                     generating = false;
                     updateSendButton();
                     saveState();
@@ -1218,7 +1232,10 @@ public class MainActivity extends Activity {
 
     private String buildProactivePrompt(Persona p, boolean forceSend) {
         StringBuilder sb = new StringBuilder();
-        sb.append(ensureSplitRule(p.prompt)).append("\n\n");
+        sb.append("# 身份边界\n")
+                .append("你现在扮演「").append(p.name).append("」。用户是「").append(userName).append("」。\n")
+                .append("你只能输出").append(p.name).append("主动发给用户的消息，不要输出用户的话，不要输出说话人前缀，不要写旁白。\n\n")
+                .append(ensureSplitRule(p.prompt)).append("\n\n");
         if (timeInject) {
             sb.append("当前时间：")
                     .append(new SimpleDateFormat("yyyy年M月d日 HH:mm EEEE", Locale.CHINA).format(new Date()))
@@ -1234,17 +1251,30 @@ public class MainActivity extends Activity {
             sb.append(m.user ? userName : p.name).append("：").append(m.text).append("\n");
         }
         if (forceSend) {
-            sb.append("\n现在请你根据人设和上下文主动给用户发一条自然消息。像真实聊天一样短，1-2句即可，必要时用反斜线 \\ 分隔多个气泡。不要解释。");
+            sb.append("\n现在请你根据人设和上下文主动给用户发一条自然消息。像真实聊天一样短，1-2句即可，必要时用单个反斜线 \\ 分隔多个气泡。不要解释。");
         } else {
             sb.append("\n用户有一段时间没说话。请判断是否适合主动发消息；如果不适合只回复 [skip]，如果适合就发一条短消息。");
         }
-        sb.append("\n").append(p.name).append("：");
+        sb.append("\n直接从消息正文开始输出：");
         return sb.toString();
     }
 
     private void requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTIFICATIONS);
+        }
+    }
+
+    private boolean hasNotificationPermission() {
+        return Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_NOTIFICATIONS) {
+            boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            Toast.makeText(this, granted ? "通知权限已允许，可以收到主动消息弹窗" : "通知权限未允许，主动消息只能写入聊天记录，可能不会弹窗", Toast.LENGTH_LONG).show();
         }
     }
 
@@ -1431,24 +1461,37 @@ public class MainActivity extends Activity {
     }
 
     private void scheduleStreamRender() {
-        if (currentAssistantTextView != null && currentAssistant != null) {
-            currentAssistantTextView.setText(currentAssistant.text.trim().isEmpty() ? "..." : currentAssistant.text);
-            if (isNearBottom()) scrollBottom();
-            return;
-        }
-        long now = System.currentTimeMillis();
-        if (now - lastStreamRenderAt >= 180L) {
-            lastStreamRenderAt = now;
-            renderAll();
-            return;
-        }
         if (streamRenderPending) return;
         streamRenderPending = true;
+        long now = System.currentTimeMillis();
+        long delay = Math.max(0L, 90L - (now - lastStreamRenderAt));
         ui.postDelayed(() -> {
             streamRenderPending = false;
             lastStreamRenderAt = System.currentTimeMillis();
+            if (currentAssistant != null && currentAssistantBuffer != null) {
+                currentAssistant.text = currentAssistantBuffer.toString();
+            }
+            if (currentAssistantTextView != null && currentAssistant != null) {
+                currentAssistantTextView.setText(MessageParser.preview(currentAssistant.text));
+                if (isNearBottom()) scrollBottom();
+                return;
+            }
             renderAll();
-        }, 180L);
+        }, delay);
+    }
+
+    private void appendAssistantDelta(String delta) {
+        if (currentAssistant == null || delta == null || delta.isEmpty()) return;
+        if (currentAssistantBuffer == null) {
+            currentAssistantBuffer = new StringBuilder();
+            if (currentAssistant.text != null && !"正在连接...".equals(currentAssistant.text)) {
+                currentAssistantBuffer.append(currentAssistant.text);
+            }
+        }
+        currentAssistantBuffer.append(delta);
+        if ("正在连接...".equals(currentAssistant.text)) {
+            currentAssistant.text = "";
+        }
     }
 
     private void showThemePicker() {
