@@ -30,7 +30,15 @@ public class UpstreamClient {
     private static final String ENDPOINT = "https://free-api.cnmwx.com/v1/completions";
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
-    private final OkHttpClient client;
+    private static final OkHttpClient SHARED_CLIENT = new OkHttpClient.Builder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(300, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .callTimeout(600, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .build();
+
+    private final OkHttpClient client = SHARED_CLIENT;
     private volatile okhttp3.Call currentCall;
 
     public interface DeltaCallback {
@@ -44,13 +52,6 @@ public class UpstreamClient {
     }
 
     public UpstreamClient() {
-        this.client = new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(300, TimeUnit.SECONDS)
-                .writeTimeout(30, TimeUnit.SECONDS)
-                .callTimeout(600, TimeUnit.SECONDS)
-                .retryOnConnectionFailure(true)
-                .build();
     }
 
     /**

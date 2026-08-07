@@ -47,6 +47,7 @@ import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -61,7 +62,6 @@ public class MainActivity extends Activity {
     private static final int MAX_TEMP_LOGS = 60;
     private static final int MAX_CORE_MEMORIES = 50;
     private static final int MAX_RENDER_MESSAGES = 90;
-    private static final int RENDER_BATCH_SIZE = 8;
 
     private static final int C_GREEN = Color.parseColor("#07C160");
     private static final int C_RED = Color.parseColor("#EF4444");
@@ -71,7 +71,12 @@ public class MainActivity extends Activity {
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final UpstreamClient api = new UpstreamClient();
     private final List<Persona> personas = new ArrayList<>();
-    private final Map<String, Bitmap> imageCache = new HashMap<>();
+    private final Map<String, Bitmap> imageCache = new LinkedHashMap<String, Bitmap>(16, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Bitmap> eldest) {
+            return size() > 12;
+        }
+    };
     private final Set<String> imageLoading = new HashSet<>();
     private final Set<String> imageFailed = new HashSet<>();
 
@@ -126,6 +131,19 @@ public class MainActivity extends Activity {
     protected void onStop() {
         super.onStop();
         if (proactiveEnabled) ProactiveMessageReceiver.schedule(this);
+    }
+
+    @Override
+    protected void onDestroy() {
+        api.cancel();
+        ui.removeCallbacksAndMessages(null);
+        synchronized (imageCache) {
+            for (Bitmap b : imageCache.values()) {
+                if (b != null && !b.isRecycled()) b.recycle();
+            }
+            imageCache.clear();
+        }
+        super.onDestroy();
     }
 
     private void setupWindow() {
@@ -589,11 +607,13 @@ public class MainActivity extends Activity {
     }
 
     private void renderAll() {
+        boolean inputFocused = input != null && input.hasFocus();
         Persona p = findActivePersona();
         if (p == null) return;
         titleView.setText(p.name);
         subTitleView.setText(proactiveEnabled ? "主动消息已开启" : "轻触打开资料侧栏");
         renderMessages(true);
+        if (inputFocused && input != null) input.requestFocus();
     }
 
     private void renderMessages(boolean allowAutoScroll) {
@@ -601,38 +621,28 @@ public class MainActivity extends Activity {
         if (p == null) return;
         boolean shouldScroll = allowAutoScroll && isNearBottom();
         currentAssistantTextView = null;
+        ++renderGeneration;
+        messageList.suppressLayout(true);
         messageList.removeAllViews();
-        int generation = ++renderGeneration;
-        List<ChatMessage> visible = new ArrayList<>();
         if (p.messages.isEmpty()) {
             ChatMessage tip = new ChatMessage(false, "你们现在可以开始聊天了");
             tip.tickle = true;
-            visible.add(tip);
+            messageList.addView(systemBubble(tip));
         } else {
             int start = Math.max(0, p.messages.size() - MAX_RENDER_MESSAGES);
             if (start > 0) {
                 ChatMessage folded = new ChatMessage(false, "已折叠 " + start + " 条较早消息，减少卡顿");
                 folded.tickle = true;
-                visible.add(folded);
+                messageList.addView(systemBubble(folded));
             }
             for (int i = start; i < p.messages.size(); i++) {
-                visible.add(p.messages.get(i));
+                ChatMessage m = p.messages.get(i);
+                messageList.addView(m.memoryDivider || m.tickle || m.recalled ? systemBubble(m) : chatBubble(p, m));
             }
         }
-        renderMessageBatch(p, visible, 0, shouldScroll, generation);
-    }
-
-    private void renderMessageBatch(Persona p, List<ChatMessage> visible, int start, boolean shouldScroll, int generation) {
-        if (generation != renderGeneration || messageList == null || p == null || visible == null) return;
-        int end = Math.min(visible.size(), start + RENDER_BATCH_SIZE);
-        for (int i = start; i < end; i++) {
-            ChatMessage m = visible.get(i);
-            messageList.addView(m.memoryDivider || m.tickle || m.recalled ? systemBubble(m) : chatBubble(p, m));
-        }
+        messageList.suppressLayout(false);
+        messageList.requestLayout();
         if (shouldScroll) scrollBottom();
-        if (end < visible.size()) {
-            ui.postDelayed(() -> renderMessageBatch(p, visible, end, shouldScroll, generation), 16L);
-        }
     }
 
     private View chatBubble(Persona persona, ChatMessage msg) {
@@ -761,6 +771,7 @@ public class MainActivity extends Activity {
                             currentAssistant.loading = false;
                             currentAssistant.error = true;
                             currentAssistant.text = "消息发送失败，稍后再试";
+                            if (currentAssistantTextView != null) currentAssistantTextView.setText(currentAssistant.text);
                         }
                         currentAssistant = null;
                         currentAssistantBuffer = null;
@@ -768,7 +779,7 @@ public class MainActivity extends Activity {
                         generating = false;
                         updateSendButton();
                         saveState();
-                        renderAll();
+                        if (currentAssistantTextView == null) renderAll();
                     });
                 }
             });
@@ -887,6 +898,7 @@ public class MainActivity extends Activity {
             final long revealDelay = delay;
             delay += 560L + Math.min(900L, Math.max(120L, part.length() * 24L));
             ui.postDelayed(() -> {
+                if (isFinishing() || isDestroyed()) return;
                 boolean active = p.id.equals(activePersonaId);
                 if (index == 0) {
                     firstBubble.loading = false;
@@ -925,6 +937,7 @@ public class MainActivity extends Activity {
         if (currentAssistant != null) {
             currentAssistant.loading = false;
             currentAssistant.text = "已停止";
+            if (currentAssistantTextView != null) currentAssistantTextView.setText(currentAssistant.text);
         }
         currentAssistant = null;
         currentAssistantBuffer = null;
@@ -932,7 +945,7 @@ public class MainActivity extends Activity {
         generating = false;
         updateSendButton();
         saveState();
-        renderAll();
+        if (currentAssistantTextView == null) renderAll();
     }
 
     private void addTempLog(Persona p, String role, String content) {
@@ -1299,13 +1312,14 @@ public class MainActivity extends Activity {
                 ui.post(() -> {
                     ai.loading = false;
                     ai.text = "我本来想主动找你来着，结果卡住了";
+                    if (currentAssistantTextView != null) currentAssistantTextView.setText(ai.text);
                     currentAssistant = null;
                     currentAssistantBuffer = null;
                     currentGeneratingPersona = null;
                     generating = false;
                     updateSendButton();
                     saveState();
-                    renderAll();
+                    if (currentAssistantTextView == null) renderAll();
                 });
             }
         });
@@ -1557,9 +1571,7 @@ public class MainActivity extends Activity {
                 preview = MessageParser.preview(preview);
                 currentAssistantTextView.setText(TextUtils.isEmpty(preview) ? TYPING_TEXT : preview);
                 if (isNearBottom()) scrollBottom();
-                return;
             }
-            renderAll();
         }, delay);
     }
 
@@ -1661,7 +1673,8 @@ public class MainActivity extends Activity {
     }
 
     private void scrollBottom() {
-        scrollView.postDelayed(() -> scrollView.fullScroll(View.FOCUS_DOWN), 50);
+        if (scrollView == null || messageList == null) return;
+        scrollView.post(() -> scrollView.scrollTo(0, messageList.getHeight()));
     }
 
     private boolean isNearBottom() {
