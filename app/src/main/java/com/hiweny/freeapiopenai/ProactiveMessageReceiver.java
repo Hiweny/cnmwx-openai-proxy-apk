@@ -1,5 +1,6 @@
 package com.hiweny.freeapiopenai;
 
+import android.Manifest;
 import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -9,6 +10,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.os.Build;
 
@@ -49,15 +51,19 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
         SharedPreferences prefs = context.getSharedPreferences("wechat_native_state", Context.MODE_PRIVATE);
         if (!prefs.getBoolean("proactiveEnabled", false)) return;
         int minutes = Math.max(1, prefs.getInt("proactiveIntervalMinutes", 30));
-        int checkMinutes = Math.min(minutes, 3);
+        int checkMinutes = Math.min(minutes, 1);
         AlarmManager alarm = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         if (alarm == null) return;
         PendingIntent pi = pendingIntent(context);
         alarm.cancel(pi);
         long triggerAt = System.currentTimeMillis() + checkMinutes * 60_000L;
-        if (Build.VERSION.SDK_INT >= 23) {
-            alarm.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi);
-        } else {
+        try {
+            if (Build.VERSION.SDK_INT >= 23) {
+                alarm.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi);
+            } else {
+                alarm.set(AlarmManager.RTC_WAKEUP, triggerAt, pi);
+            }
+        } catch (SecurityException ignored) {
             alarm.set(AlarmManager.RTC_WAKEUP, triggerAt, pi);
         }
     }
@@ -141,15 +147,18 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
         long bestIdle = 0;
         boolean bestActive = false;
         long activeIdleGap = 60_000L;
-        long otherIdleGap = Math.max(1, Math.min(minutes, 3)) * 60_000L;
-        long repeatGap = Math.max(3, minutes) * 60_000L;
+        long otherIdleGap = Math.max(2, Math.min(minutes, 3)) * 60_000L;
+        long activeRepeatGap = Math.max(2, Math.min(minutes, 5)) * 60_000L;
+        long otherRepeatGap = Math.max(3, minutes) * 60_000L;
         for (Persona p : personas) {
             long lastUser = p.lastUserMessageTime > 0 ? p.lastUserMessageTime : p.lastMessageTime;
             long idle = now - lastUser;
             boolean active = p.id != null && p.id.equals(activePersonaId);
             long requiredIdle = active ? activeIdleGap : otherIdleGap;
+            long repeatGap = active ? activeRepeatGap : otherRepeatGap;
             if (idle < requiredIdle) continue;
             if (p.lastProactiveTime > 0 && now - p.lastProactiveTime < repeatGap) continue;
+            if (active) return p;
             if (best == null || (active && !bestActive) || (!bestActive && idle > bestIdle) || (p.pinned && !best.pinned)) {
                 best = p;
                 bestIdle = idle;
@@ -197,6 +206,9 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
 
     static void notifyNow(Context context, Persona p, String text) {
         if (context == null || p == null || text == null || text.trim().isEmpty()) return;
+        if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
         ensureChannel(context);
         Intent open = new Intent(context, MainActivity.class);
         open.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);

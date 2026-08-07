@@ -8,6 +8,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -38,12 +40,17 @@ import android.widget.Toast;
 
 import org.json.JSONArray;
 
+import java.io.InputStream;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 public class MainActivity extends Activity {
@@ -54,6 +61,7 @@ public class MainActivity extends Activity {
     private static final int MAX_TEMP_LOGS = 60;
     private static final int MAX_CORE_MEMORIES = 50;
     private static final int MAX_RENDER_MESSAGES = 90;
+    private static final int RENDER_BATCH_SIZE = 8;
 
     private static final int C_GREEN = Color.parseColor("#07C160");
     private static final int C_RED = Color.parseColor("#EF4444");
@@ -63,6 +71,9 @@ public class MainActivity extends Activity {
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final UpstreamClient api = new UpstreamClient();
     private final List<Persona> personas = new ArrayList<>();
+    private final Map<String, Bitmap> imageCache = new HashMap<>();
+    private final Set<String> imageLoading = new HashSet<>();
+    private final Set<String> imageFailed = new HashSet<>();
 
     private SharedPreferences prefs;
     private FrameLayout root;
@@ -79,6 +90,7 @@ public class MainActivity extends Activity {
     private long lastStreamRenderAt = 0L;
     private boolean streamRenderPending = false;
     private StringBuilder currentAssistantBuffer;
+    private int renderGeneration = 0;
 
     private String activePersonaId = "xiaomei";
     private String userName = "我";
@@ -590,24 +602,37 @@ public class MainActivity extends Activity {
         boolean shouldScroll = allowAutoScroll && isNearBottom();
         currentAssistantTextView = null;
         messageList.removeAllViews();
+        int generation = ++renderGeneration;
+        List<ChatMessage> visible = new ArrayList<>();
         if (p.messages.isEmpty()) {
             ChatMessage tip = new ChatMessage(false, "你们现在可以开始聊天了");
             tip.tickle = true;
-            messageList.addView(systemBubble(tip));
+            visible.add(tip);
         } else {
             int start = Math.max(0, p.messages.size() - MAX_RENDER_MESSAGES);
             if (start > 0) {
                 ChatMessage folded = new ChatMessage(false, "已折叠 " + start + " 条较早消息，减少卡顿");
                 folded.tickle = true;
-                messageList.addView(systemBubble(folded));
+                visible.add(folded);
             }
             for (int i = start; i < p.messages.size(); i++) {
-                ChatMessage m = p.messages.get(i);
-                if (m.memoryDivider || m.tickle || m.recalled) messageList.addView(systemBubble(m));
-                else messageList.addView(chatBubble(p, m));
+                visible.add(p.messages.get(i));
             }
         }
+        renderMessageBatch(p, visible, 0, shouldScroll, generation);
+    }
+
+    private void renderMessageBatch(Persona p, List<ChatMessage> visible, int start, boolean shouldScroll, int generation) {
+        if (generation != renderGeneration || messageList == null || p == null || visible == null) return;
+        int end = Math.min(visible.size(), start + RENDER_BATCH_SIZE);
+        for (int i = start; i < end; i++) {
+            ChatMessage m = visible.get(i);
+            messageList.addView(m.memoryDivider || m.tickle || m.recalled ? systemBubble(m) : chatBubble(p, m));
+        }
         if (shouldScroll) scrollBottom();
+        if (end < visible.size()) {
+            ui.postDelayed(() -> renderMessageBatch(p, visible, end, shouldScroll, generation), 16L);
+        }
     }
 
     private View chatBubble(Persona persona, ChatMessage msg) {
@@ -755,6 +780,7 @@ public class MainActivity extends Activity {
             renderAll();
             return;
         }
+        ++renderGeneration;
         if (messageList.getChildCount() == 1 && findActivePersona() != null && findActivePersona().messages.size() <= 2) {
             messageList.removeAllViews();
         }
@@ -854,10 +880,12 @@ public class MainActivity extends Activity {
 
     private void revealAssistantParts(Persona p, ChatMessage firstBubble, List<String> parts) {
         if (p == null || firstBubble == null || parts == null || parts.isEmpty()) return;
+        long delay = 40L;
         for (int i = 0; i < parts.size(); i++) {
             final int index = i;
             final String part = parts.get(i);
-            long delay = index == 0 ? 80L : 260L + index * 360L + Math.min(160L, part.length() * 6L);
+            final long revealDelay = delay;
+            delay += 560L + Math.min(900L, Math.max(120L, part.length() * 24L));
             ui.postDelayed(() -> {
                 boolean active = p.id.equals(activePersonaId);
                 if (index == 0) {
@@ -879,12 +907,13 @@ public class MainActivity extends Activity {
                     saveState();
                     maybeAutoOrganize(p);
                 }
-            }, delay);
+            }, revealDelay);
         }
     }
 
     private void appendMessageView(Persona p, ChatMessage m) {
         if (messageList == null || p == null || m == null) return;
+        ++renderGeneration;
         if (messageList.getChildCount() > MAX_RENDER_MESSAGES + 1) {
             messageList.removeViewAt(0);
         }
@@ -967,7 +996,7 @@ public class MainActivity extends Activity {
                     divider.memoryDivider = true;
                     p.messages.add(divider);
                     saveState();
-                    renderAll();
+                    if (p.id.equals(activePersonaId)) appendMessageView(p, divider);
                     Toast.makeText(this, "记忆已更新", Toast.LENGTH_SHORT).show();
                 });
             } catch (Exception e) {
@@ -1516,12 +1545,17 @@ public class MainActivity extends Activity {
         if (streamRenderPending) return;
         streamRenderPending = true;
         long now = System.currentTimeMillis();
-        long delay = Math.max(0L, 90L - (now - lastStreamRenderAt));
+        long delay = Math.max(0L, 120L - (now - lastStreamRenderAt));
         ui.postDelayed(() -> {
             streamRenderPending = false;
             lastStreamRenderAt = System.currentTimeMillis();
             if (currentAssistantTextView != null && currentAssistant != null) {
-                currentAssistantTextView.setText(TYPING_TEXT);
+                String preview;
+                synchronized (MainActivity.this) {
+                    preview = currentAssistantBuffer == null ? "" : currentAssistantBuffer.toString();
+                }
+                preview = MessageParser.preview(preview);
+                currentAssistantTextView.setText(TextUtils.isEmpty(preview) ? TYPING_TEXT : preview);
                 if (isNearBottom()) scrollBottom();
                 return;
             }
@@ -1542,15 +1576,65 @@ public class MainActivity extends Activity {
             currentAssistantBuffer.append(delta);
             currentAssistant.text = TYPING_TEXT;
         }
+        scheduleStreamRender();
     }
 
     private void safeSetImageUri(ImageView imageView, String uri) {
         if (imageView == null || uri == null || uri.trim().isEmpty()) return;
-        try {
-            imageView.setImageURI(Uri.parse(uri));
-        } catch (Exception ignored) {
-            imageView.setImageDrawable(null);
+        imageView.setTag(uri);
+        synchronized (imageCache) {
+            if (imageFailed.contains(uri)) {
+                imageView.setImageDrawable(null);
+                return;
+            }
+            Bitmap cached = imageCache.get(uri);
+            if (cached != null) {
+                imageView.setImageBitmap(cached);
+                return;
+            }
+            if (imageLoading.contains(uri)) {
+                ui.postDelayed(() -> safeSetImageUri(imageView, uri), 120L);
+                return;
+            }
+            imageLoading.add(uri);
         }
+        new Thread(() -> {
+            Bitmap bitmap = null;
+            try {
+                Uri parsed = Uri.parse(uri);
+                BitmapFactory.Options bounds = new BitmapFactory.Options();
+                bounds.inJustDecodeBounds = true;
+                try (InputStream in = getContentResolver().openInputStream(parsed)) {
+                    BitmapFactory.decodeStream(in, null, bounds);
+                }
+                BitmapFactory.Options opts = new BitmapFactory.Options();
+                opts.inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, 1280);
+                opts.inPreferredConfig = Bitmap.Config.RGB_565;
+                try (InputStream in = getContentResolver().openInputStream(parsed)) {
+                    bitmap = BitmapFactory.decodeStream(in, null, opts);
+                }
+            } catch (Exception ignored) {
+            }
+            Bitmap finalBitmap = bitmap;
+            synchronized (imageCache) {
+                imageLoading.remove(uri);
+                if (finalBitmap != null) imageCache.put(uri, finalBitmap);
+                else imageFailed.add(uri);
+            }
+            ui.post(() -> {
+                Object tag = imageView.getTag();
+                if (tag == null || !tag.equals(uri)) return;
+                if (finalBitmap != null) imageView.setImageBitmap(finalBitmap);
+                else imageView.setImageDrawable(null);
+            });
+        }, "safe-image-decode").start();
+    }
+
+    private int sampleSize(int width, int height, int maxSide) {
+        int sample = 1;
+        int longest = Math.max(width, height);
+        while (longest / sample > maxSide) sample *= 2;
+        return Math.max(1, sample);
     }
 
     private void showThemePicker() {
