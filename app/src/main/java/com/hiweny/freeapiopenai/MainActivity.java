@@ -510,7 +510,7 @@ public class MainActivity extends Activity {
         notify.setOnClickListener(v -> {
             requestNotificationPermission();
             requestBatteryOptimizationIgnore();
-            ProactiveMessageReceiver.ensureChannel(this);
+            ProactiveMessageReceiver.ensureChannel(MainActivity.this);
         });
         Button testNotify = listButton("立即测试主动消息通知");
         testNotify.setOnClickListener(v -> {
@@ -521,7 +521,7 @@ public class MainActivity extends Activity {
                 Toast.makeText(this, "请先允许通知权限，再点一次测试", Toast.LENGTH_LONG).show();
                 return;
             }
-            if (p != null) ProactiveMessageReceiver.notifyNow(this, p, "这是一条主动消息通知测试。看到这条弹窗，就说明主动消息通知通道正常。");
+            if (p != null) ProactiveMessageReceiver.notifyNow(MainActivity.this, p, "这是一条主动消息通知测试。看到这条弹窗，就说明主动消息通知通道正常。");
             Toast.makeText(this, "测试通知已发送", Toast.LENGTH_SHORT).show();
         });
         Button myAvatar = listButton("设置我的头像");
@@ -1212,7 +1212,7 @@ public class MainActivity extends Activity {
                     String notifyText = MessageParser.preview(ai.text);
                     p.lastProactiveTime = System.currentTimeMillis();
                     finishAssistantResponse(p);
-                    ProactiveMessageReceiver.notifyNow(this, p, notifyText);
+                    ProactiveMessageReceiver.notifyNow(MainActivity.this, p, notifyText);
                 });
             }
             @Override public void onError(Exception error) {
