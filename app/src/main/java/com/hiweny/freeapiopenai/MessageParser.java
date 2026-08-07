@@ -35,7 +35,7 @@ class MessageParser {
     }
 
     static String preview(String raw) {
-        if (raw == null || raw.trim().isEmpty()) return "正在连接...";
+        if (raw == null || raw.trim().isEmpty()) return "对方正在输入…";
         String text = normalizeSeparators(raw)
                 .replace("[recall]", "")
                 .replace("[tickle]", "")

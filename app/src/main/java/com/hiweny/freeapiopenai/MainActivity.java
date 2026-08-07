@@ -56,6 +56,7 @@ public class MainActivity extends Activity {
 
     private static final int C_GREEN = Color.parseColor("#07C160");
     private static final int C_RED = Color.parseColor("#EF4444");
+    private static final String TYPING_TEXT = "对方正在输入…";
     private static final String SPLIT_RULE = "\n# 气泡分割\n如果回复包含多个短句，可以用单个反斜线 \\ 分隔多个气泡；分隔符只是给程序看的，最终界面不会显示。每个气泡尽量控制在1-2个短句，不要每次都写很长一整段。禁止输出说话人名字、角色名前缀、旁白或规则说明。";
 
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -516,7 +517,7 @@ public class MainActivity extends Activity {
         testNotify.setOnClickListener(v -> {
             Persona p = findActivePersona();
             requestNotificationPermission();
-            ProactiveMessageReceiver.ensureChannel(this);
+            ProactiveMessageReceiver.ensureChannel(MainActivity.this);
             if (!hasNotificationPermission()) {
                 Toast.makeText(this, "请先允许通知权限，再点一次测试", Toast.LENGTH_LONG).show();
                 return;
@@ -555,7 +556,7 @@ public class MainActivity extends Activity {
         sideContent.addView(threshold);
         sideContent.addView(sidebarText("自动整理阈值：累计多少条临时聊天后整理为长期记忆。越小越频繁，建议 30。"));
         sideContent.addView(proactiveInterval);
-        sideContent.addView(sidebarText("主动消息心跳：开启后按这个间隔检查一次。到了时间后，应用会在后台挑一个最久没聊的人设，让 TA 生成一条短消息，写入聊天记录，并通过系统通知弹窗提醒你。安卓会受通知权限、电池优化和厂商后台限制影响；点“申请通知权限 / 后台保活”后，再点“立即测试主动消息通知”可以马上确认弹窗是否正常。"));
+        sideContent.addView(sidebarText("主动消息心跳：开启后按这个间隔唤醒一次后台检查。它不是到点必发，而是让当前最合适的人设结合时间、上下文和聊天氛围自主判断要不要发、发什么；不自然或可能打扰你时会跳过。安卓会受通知权限、电池优化和厂商后台限制影响；点“申请通知权限 / 后台保活”后，再点“立即测试主动消息通知”可以马上确认弹窗是否正常。"));
         sideContent.addView(auto);
         sideContent.addView(time);
         sideContent.addView(proactive);
@@ -690,7 +691,7 @@ public class MainActivity extends Activity {
         addTempLog(p, "user", text);
         p.lastUserMessageTime = System.currentTimeMillis();
 
-        currentAssistant = new ChatMessage(false, "正在连接...");
+        currentAssistant = new ChatMessage(false, TYPING_TEXT);
         currentAssistant.loading = true;
         currentAssistantBuffer = new StringBuilder();
         p.messages.add(currentAssistant);
@@ -707,7 +708,6 @@ public class MainActivity extends Activity {
                     ui.post(() -> {
                         if (currentAssistant != null) {
                             appendAssistantDelta(delta);
-                            scheduleStreamRender();
                         }
                     });
                 }
@@ -811,27 +811,18 @@ public class MainActivity extends Activity {
 
     private void finishAssistantResponse(Persona p) {
         if (currentAssistant == null) return;
-        if (currentAssistantBuffer != null) currentAssistant.text = currentAssistantBuffer.toString();
-        String raw = currentAssistant.text == null ? "" : currentAssistant.text.trim();
-        if ("正在连接...".equals(raw)) raw = "";
+        ChatMessage firstBubble = currentAssistant;
+        String raw = currentAssistantBuffer == null ? "" : currentAssistantBuffer.toString().trim();
         MessageParser.Parsed parsed = MessageParser.parse(raw);
-        currentAssistant.loading = false;
+        firstBubble.text = TYPING_TEXT;
+        firstBubble.loading = true;
 
         if (parsed.recall) recallPreviousAi(p);
         if (parsed.parts.isEmpty()) {
-            currentAssistant.text = "我刚刚走神了，再发一次试试";
+            firstBubble.loading = false;
+            firstBubble.text = "我刚刚走神了，再发一次试试";
         } else {
-            currentAssistant.text = parsed.parts.get(0);
-            if (parsed.parts.size() > 1) {
-                for (int i = 1; i < parsed.parts.size(); i++) {
-                    final String part = parsed.parts.get(i);
-                    ui.postDelayed(() -> {
-                        p.messages.add(new ChatMessage(false, part));
-                        saveState();
-                        renderAll();
-                    }, 350L * i + (long) (Math.random() * 250));
-                }
-            }
+            revealAssistantParts(p, firstBubble, parsed.parts);
             addTempLog(p, "ai", joinParts(parsed.parts));
         }
         currentAssistant = null;
@@ -844,12 +835,32 @@ public class MainActivity extends Activity {
         ProactiveMessageReceiver.schedule(this);
     }
 
+    private void revealAssistantParts(Persona p, ChatMessage firstBubble, List<String> parts) {
+        if (p == null || firstBubble == null || parts == null || parts.isEmpty()) return;
+        for (int i = 0; i < parts.size(); i++) {
+            final int index = i;
+            final String part = parts.get(i);
+            long delay = 420L + index * 720L + Math.min(380L, part.length() * 10L);
+            ui.postDelayed(() -> {
+                if (index == 0) {
+                    firstBubble.loading = false;
+                    firstBubble.text = part;
+                } else {
+                    p.messages.add(new ChatMessage(false, part));
+                }
+                p.lastMessageTime = System.currentTimeMillis();
+                saveState();
+                renderAll();
+                scrollBottom();
+            }, delay);
+        }
+    }
+
     private void stopGeneration() {
         api.cancel();
         if (currentAssistant != null) {
             currentAssistant.loading = false;
-            if (currentAssistantBuffer != null) currentAssistant.text = currentAssistantBuffer.toString();
-            if (currentAssistant.text.trim().isEmpty()) currentAssistant.text = "已停止";
+            currentAssistant.text = "已停止";
         }
         currentAssistant = null;
         currentAssistantBuffer = null;
@@ -1190,7 +1201,7 @@ public class MainActivity extends Activity {
 
     private void triggerManualProactive(Persona p) {
         if (p == null || generating) return;
-        ChatMessage ai = new ChatMessage(false, "正在连接...");
+        ChatMessage ai = new ChatMessage(false, TYPING_TEXT);
         ai.loading = true;
         p.messages.add(ai);
         currentAssistant = ai;
@@ -1203,16 +1214,16 @@ public class MainActivity extends Activity {
             @Override public void onDelta(String delta) {
                 ui.post(() -> {
                     appendAssistantDelta(delta);
-                    scheduleStreamRender();
                 });
             }
             @Override public void onDone() {
                 ui.post(() -> {
-                    if (currentAssistantBuffer != null) ai.text = currentAssistantBuffer.toString();
-                    String notifyText = MessageParser.preview(ai.text);
+                    String raw = currentAssistantBuffer == null ? "" : currentAssistantBuffer.toString().trim();
+                    MessageParser.Parsed parsed = MessageParser.parse(raw);
+                    String notifyText = parsed.parts.isEmpty() ? "" : parsed.parts.get(0);
                     p.lastProactiveTime = System.currentTimeMillis();
                     finishAssistantResponse(p);
-                    ProactiveMessageReceiver.notifyNow(MainActivity.this, p, notifyText);
+                    if (!notifyText.isEmpty()) ProactiveMessageReceiver.notifyNow(MainActivity.this, p, notifyText);
                 });
             }
             @Override public void onError(Exception error) {
@@ -1468,11 +1479,8 @@ public class MainActivity extends Activity {
         ui.postDelayed(() -> {
             streamRenderPending = false;
             lastStreamRenderAt = System.currentTimeMillis();
-            if (currentAssistant != null && currentAssistantBuffer != null) {
-                currentAssistant.text = currentAssistantBuffer.toString();
-            }
             if (currentAssistantTextView != null && currentAssistant != null) {
-                currentAssistantTextView.setText(MessageParser.preview(currentAssistant.text));
+                currentAssistantTextView.setText(TYPING_TEXT);
                 if (isNearBottom()) scrollBottom();
                 return;
             }
@@ -1484,14 +1492,12 @@ public class MainActivity extends Activity {
         if (currentAssistant == null || delta == null || delta.isEmpty()) return;
         if (currentAssistantBuffer == null) {
             currentAssistantBuffer = new StringBuilder();
-            if (currentAssistant.text != null && !"正在连接...".equals(currentAssistant.text)) {
+            if (currentAssistant.text != null && !TYPING_TEXT.equals(currentAssistant.text)) {
                 currentAssistantBuffer.append(currentAssistant.text);
             }
         }
         currentAssistantBuffer.append(delta);
-        if ("正在连接...".equals(currentAssistant.text)) {
-            currentAssistant.text = "";
-        }
+        currentAssistant.text = TYPING_TEXT;
     }
 
     private void showThemePicker() {

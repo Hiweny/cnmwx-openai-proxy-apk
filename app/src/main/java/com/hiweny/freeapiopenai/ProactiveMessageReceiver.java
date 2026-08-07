@@ -96,11 +96,19 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
             Persona target = chooseTarget(personas, now, minutes);
             if (target == null) return;
 
-            String message = generateProactiveMessage(prefs, target, now);
+            String message = generateProactiveMessage(prefs, target, now, minutes);
             if (message == null || message.trim().isEmpty()) return;
             MessageParser.Parsed parsed = MessageParser.parse(message);
             String finalText = parsed.parts.isEmpty() ? message.trim() : parsed.parts.get(0);
-            target.messages.add(new ChatMessage(false, finalText));
+            if (parsed.parts.isEmpty()) {
+                target.messages.add(new ChatMessage(false, finalText));
+            } else {
+                for (String part : parsed.parts) {
+                    if (part != null && !part.trim().isEmpty()) {
+                        target.messages.add(new ChatMessage(false, part.trim()));
+                    }
+                }
+            }
             target.lastMessageTime = now;
             target.lastProactiveTime = now;
             savePersonas(prefs, personas);
@@ -143,8 +151,10 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
         return best;
     }
 
-    private String generateProactiveMessage(SharedPreferences prefs, Persona p, long now) throws Exception {
+    private String generateProactiveMessage(SharedPreferences prefs, Persona p, long now, int heartbeatMinutes) throws Exception {
         String userName = prefs.getString("userName", "我");
+        long lastUser = p.lastUserMessageTime > 0 ? p.lastUserMessageTime : p.lastMessageTime;
+        long idleMinutes = Math.max(0L, (now - lastUser) / 60_000L);
         StringBuilder sb = new StringBuilder();
         sb.append("# 身份边界\n")
                 .append("你现在扮演「").append(p.name).append("」。用户是「").append(userName).append("」。\n")
@@ -153,6 +163,9 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
         sb.append("当前时间：")
                 .append(new SimpleDateFormat("yyyy年M月d日 HH:mm EEEE", Locale.CHINA).format(new Date(now)))
                 .append("\n");
+        sb.append("后台心跳说明：应用大约每 ").append(heartbeatMinutes)
+                .append(" 分钟醒来检查一次，但这不是让你每次都发消息。你必须像真实的人一样，自主判断此刻要不要打扰用户。\n")
+                .append("用户距离上次发消息约 ").append(idleMinutes).append(" 分钟。\n");
         if (p.hiddenMemory != null && !p.hiddenMemory.trim().isEmpty()) {
             sb.append("长期背景，只用于保持一致，不要主动暴露：\n").append(p.hiddenMemory.trim()).append("\n");
         }
@@ -163,10 +176,11 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
             if (m.loading || m.error || m.tickle || m.memoryDivider || m.recalled) continue;
             sb.append(m.user ? userName : p.name).append("：").append(m.text).append("\n");
         }
-        sb.append("\n现在用户已经有一段时间没发消息。请判断你是否应该主动发一条自然消息。")
-                .append("如果不适合主动发消息，只回复 [skip]。")
-                .append("如果适合，请直接发一条很短的微信式消息，")
-                .append("1-2句，必要时用单个反斜线 \\ 拆分气泡，不要解释，不要输出名字前缀。")
+        sb.append("\n# 主动消息判断\n")
+                .append("请根据当前时间、最近聊天氛围、关系亲密度、用户是否刚忙完、是否太晚/太早、上次是谁先结束对话，自主判断是否应该主动发消息。\n")
+                .append("不自然、太频繁、像机器人定时任务、可能打扰用户时，只回复 [skip]。\n")
+                .append("只有你觉得此刻真实地想找用户说一句，才发一条很短的微信式消息，1-2句即可，必要时用单个反斜线 \\ 拆分气泡。\n")
+                .append("不要解释判断过程，不要输出名字前缀。")
                 .append("\n直接从消息正文开始输出：");
         String result = new UpstreamClient().complete(sb.toString()).trim();
         if (result.contains("[skip]")) return "";
