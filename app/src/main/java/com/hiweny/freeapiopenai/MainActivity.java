@@ -71,6 +71,9 @@ public class MainActivity extends Activity {
     private ImageButton sendButton;
     private TextView titleView;
     private TextView subTitleView;
+    private FrameLayout sideOverlay;
+    private LinearLayout sideContent;
+    private TextView currentAssistantTextView;
     private long lastStreamRenderAt = 0L;
     private boolean streamRenderPending = false;
 
@@ -207,7 +210,7 @@ public class MainActivity extends Activity {
         root.addView(main, new FrameLayout.LayoutParams(-1, -1));
 
         LinearLayout.LayoutParams headerLp = new LinearLayout.LayoutParams(-1, -2);
-        headerLp.setMargins(dp(8), dp(8), dp(8), 0);
+        headerLp.setMargins(dp(10), dp(8), dp(10), 0);
         main.addView(headerView(), headerLp);
 
         scrollView = new ScrollView(this);
@@ -220,17 +223,19 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(-1, -2);
         inputLp.setMargins(dp(8), 0, dp(8), dp(8));
         main.addView(inputBar(), inputLp);
+
+        buildSidePanel();
     }
 
     private View headerView() {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(10), dp(8), dp(10), dp(8));
-        header.setBackground(roundStroke(theme.headerBg, dp(18), dp(1), subtleBorder()));
+        header.setPadding(dp(8), dp(5), dp(8), dp(5));
+        header.setBackground(roundStroke(theme.headerBg, dp(15), dp(1), subtleBorder()));
 
         ImageButton list = iconButton("☰", theme.textPrimary);
-        list.setOnClickListener(v -> showPersonaList());
+        list.setOnClickListener(v -> showSidebar());
         header.addView(list);
 
         LinearLayout titleBox = new LinearLayout(this);
@@ -238,36 +243,27 @@ public class MainActivity extends Activity {
         titleBox.setGravity(Gravity.CENTER);
         titleBox.setOnClickListener(v -> {
             Persona p = findActivePersona();
-            if (p != null) showPersonaProfile(p);
+            if (p != null) showSidebar();
         });
         header.addView(titleBox, new LinearLayout.LayoutParams(0, -2, 1f));
 
         titleView = new TextView(this);
         titleView.setTextColor(theme.textPrimary);
-        titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         titleView.setTypeface(Typeface.DEFAULT_BOLD);
         titleView.setGravity(Gravity.CENTER);
+        titleView.setSingleLine(true);
+        titleView.setEllipsize(TextUtils.TruncateAt.END);
         titleBox.addView(titleView);
 
         subTitleView = new TextView(this);
         subTitleView.setTextColor(theme.textSecondary);
-        subTitleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        subTitleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
         subTitleView.setGravity(Gravity.CENTER);
         titleBox.addView(subTitleView);
 
-        ImageButton memory = iconButton("🧠", theme.textPrimary);
-        memory.setOnClickListener(v -> showMemoryPanel());
-        header.addView(memory);
-
-        ImageButton edit = iconButton("✎", theme.textPrimary);
-        edit.setOnClickListener(v -> {
-            Persona p = findActivePersona();
-            if (p != null) showPersonaEditor(p);
-        });
-        header.addView(edit);
-
         ImageButton settings = iconButton("⋯", theme.textPrimary);
-        settings.setOnClickListener(v -> showSettings());
+        settings.setOnClickListener(v -> showSidebar());
         header.addView(settings);
 
         return header;
@@ -327,11 +323,246 @@ public class MainActivity extends Activity {
         return wrap;
     }
 
+    private void buildSidePanel() {
+        sideOverlay = new FrameLayout(this);
+        sideOverlay.setVisibility(View.GONE);
+        sideOverlay.setBackgroundColor(Color.argb(theme.dark ? 155 : 105, 0, 0, 0));
+        sideOverlay.setOnClickListener(v -> hideSidebar());
+
+        ScrollView drawer = new ScrollView(this);
+        drawer.setFillViewport(false);
+        drawer.setBackground(roundStroke(theme.headerBg, dp(22), dp(1), subtleBorder()));
+        drawer.setOnClickListener(v -> {});
+
+        sideContent = new LinearLayout(this);
+        sideContent.setOrientation(LinearLayout.VERTICAL);
+        sideContent.setPadding(dp(16), dp(18), dp(16), dp(28));
+        sideContent.setOnClickListener(v -> {});
+        drawer.addView(sideContent, new ScrollView.LayoutParams(-1, -2));
+
+        int width = (int) (getResources().getDisplayMetrics().widthPixels * 0.86f);
+        FrameLayout.LayoutParams drawerLp = new FrameLayout.LayoutParams(width, -1, Gravity.LEFT);
+        drawerLp.setMargins(dp(8), dp(8), dp(20), dp(8));
+        sideOverlay.addView(drawer, drawerLp);
+        root.addView(sideOverlay, new FrameLayout.LayoutParams(-1, -1));
+    }
+
+    private void showSidebar() {
+        if (sideOverlay == null || sideContent == null) return;
+        Persona active = findActivePersona();
+        sideContent.removeAllViews();
+        addSidebarHeader(active);
+        addPersonaSection();
+        if (active != null) {
+            addPersonaEditorSection(active);
+            addMemorySection(active);
+        }
+        addSettingsSection();
+        sideOverlay.setVisibility(View.VISIBLE);
+    }
+
+    private void hideSidebar() {
+        if (sideOverlay != null) sideOverlay.setVisibility(View.GONE);
+    }
+
+    private void addSidebarHeader(Persona p) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, 0, 0, dp(14));
+        if (p != null) {
+            row.addView(avatarView(p.name, p.avatarUri));
+            TextView name = new TextView(this);
+            name.setText(p.name + "\n" + p.messages.size() + " 条消息 · " + p.memories.size() + " 条记忆");
+            name.setTextColor(theme.textPrimary);
+            name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+            name.setTypeface(Typeface.DEFAULT_BOLD);
+            name.setPadding(dp(12), 0, 0, 0);
+            row.addView(name, new LinearLayout.LayoutParams(0, -2, 1f));
+        }
+        Button close = miniButton("关闭");
+        close.setOnClickListener(v -> hideSidebar());
+        row.addView(close, new LinearLayout.LayoutParams(dp(64), dp(36)));
+        sideContent.addView(row);
+    }
+
+    private void addPersonaSection() {
+        sideContent.addView(sectionTitle("聊天对象"));
+        List<Persona> sorted = new ArrayList<>(personas);
+        Collections.sort(sorted, (a, b) -> {
+            if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
+            return Long.compare(b.lastMessageTime, a.lastMessageTime);
+        });
+        for (Persona p : sorted) {
+            Button b = listButton((p.id.equals(activePersonaId) ? "● " : "") + (p.pinned ? "★ " : "") + p.name + "  ·  " + p.messages.size() + "条");
+            b.setOnClickListener(v -> {
+                activePersonaId = p.id;
+                saveState();
+                renderAll();
+                showSidebar();
+            });
+            sideContent.addView(b);
+        }
+        Button add = listButton("＋ 新建人设");
+        add.setOnClickListener(v -> {
+            Persona p = Persona.defaults(UUID.randomUUID().toString(), "新朋友",
+                    "# 任务\n你需要扮演一个真实聊天对象，像微信聊天一样自然回复。\n# 规则\n回复简短，必要时用反斜线 \\ 分隔多条气泡。" + SPLIT_RULE);
+            personas.add(p);
+            activePersonaId = p.id;
+            saveState();
+            renderAll();
+            showSidebar();
+        });
+        sideContent.addView(add);
+    }
+
+    private void addPersonaEditorSection(Persona p) {
+        sideContent.addView(sectionTitle("人设编辑"));
+        pendingPickPersonaIndex = personas.indexOf(p);
+        EditText name = field("名称", p.name, 1);
+        EditText prompt = field("人格设定", p.prompt, 6);
+        EditText hidden = field("隐藏记忆（不会显示在聊天里）", p.hiddenMemory, 4);
+        Button avatar = listButton(TextUtils.isEmpty(p.avatarUri) ? "设置 AI 头像" : "更换 AI 头像");
+        avatar.setOnClickListener(v -> {
+            pendingPickPersonaIndex = personas.indexOf(p);
+            pickImage(REQ_PERSONA_AVATAR);
+        });
+        Button pin = listButton(p.pinned ? "取消置顶" : "置顶这个人设");
+        pin.setOnClickListener(v -> {
+            p.pinned = !p.pinned;
+            saveState();
+            showSidebar();
+        });
+        Button save = listButton("保存人设");
+        save.setOnClickListener(v -> {
+            p.name = safe(name.getText().toString(), "新朋友");
+            p.prompt = ensureSplitRule(safe(prompt.getText().toString(), p.prompt));
+            p.hiddenMemory = hidden.getText().toString().trim();
+            saveState();
+            renderAll();
+            showSidebar();
+            Toast.makeText(this, "人设已保存", Toast.LENGTH_SHORT).show();
+        });
+        Button proactiveNow = listButton("让 TA 现在主动发一条");
+        proactiveNow.setOnClickListener(v -> {
+            hideSidebar();
+            triggerManualProactive(p);
+        });
+        sideContent.addView(name);
+        sideContent.addView(prompt);
+        sideContent.addView(hidden);
+        sideContent.addView(avatar);
+        sideContent.addView(pin);
+        sideContent.addView(save);
+        sideContent.addView(proactiveNow);
+        if (personas.size() > 1) {
+            Button delete = listButton("删除这个人设");
+            delete.setTextColor(C_RED);
+            delete.setOnClickListener(v -> {
+                personas.remove(p);
+                activePersonaId = personas.get(0).id;
+                saveState();
+                renderAll();
+                showSidebar();
+            });
+            sideContent.addView(delete);
+        }
+    }
+
+    private void addMemorySection(Persona p) {
+        sideContent.addView(sectionTitle("记忆"));
+        TextView info = sidebarText("长期记忆：" + p.memories.size() + " 条\n临时记录：" + p.tempLogs.size() + " 条");
+        sideContent.addView(info);
+        int count = 0;
+        for (CoreMemory m : topMemories(p)) {
+            sideContent.addView(sidebarText("• " + m.content));
+            if (++count >= 5) break;
+        }
+        Button organize = listButton("立即整理记忆");
+        organize.setOnClickListener(v -> organizeMemory(p, true));
+        Button clear = listButton("清空长期记忆");
+        clear.setOnClickListener(v -> {
+            p.memories.clear();
+            saveState();
+            renderAll();
+            showSidebar();
+        });
+        sideContent.addView(organize);
+        sideContent.addView(clear);
+    }
+
+    private void addSettingsSection() {
+        sideContent.addView(sectionTitle("设置"));
+        EditText name = field("我的昵称", userName, 1);
+        EditText context = field("上下文轮数", String.valueOf(talkCount), 1);
+        context.setInputType(InputType.TYPE_CLASS_NUMBER);
+        EditText threshold = field("自动整理阈值（消息条数）", String.valueOf(memoryThreshold), 1);
+        threshold.setInputType(InputType.TYPE_CLASS_NUMBER);
+        EditText proactiveInterval = field("主动消息心跳间隔（分钟，建议 15-60）", String.valueOf(proactiveIntervalMinutes), 1);
+        proactiveInterval.setInputType(InputType.TYPE_CLASS_NUMBER);
+        Button auto = listButton(autoMemory ? "自动整理：开" : "自动整理：关");
+        final boolean[] autoValue = {autoMemory};
+        auto.setOnClickListener(v -> { autoValue[0] = !autoValue[0]; auto.setText(autoValue[0] ? "自动整理：开" : "自动整理：关"); });
+        Button time = listButton(timeInject ? "时间注入：开" : "时间注入：关");
+        final boolean[] timeValue = {timeInject};
+        time.setOnClickListener(v -> { timeValue[0] = !timeValue[0]; time.setText(timeValue[0] ? "时间注入：开" : "时间注入：关"); });
+        Button proactive = listButton(proactiveEnabled ? "主动消息：开" : "主动消息：关");
+        final boolean[] proactiveValue = {proactiveEnabled};
+        proactive.setOnClickListener(v -> {
+            proactiveValue[0] = !proactiveValue[0];
+            proactive.setText(proactiveValue[0] ? "主动消息：开" : "主动消息：关");
+        });
+        Button themeBtn = listButton("聊天主题：" + theme.name);
+        themeBtn.setOnClickListener(v -> showThemePicker());
+        Button notify = listButton("申请通知权限 / 后台保活");
+        notify.setOnClickListener(v -> {
+            requestNotificationPermission();
+            requestBatteryOptimizationIgnore();
+            ProactiveMessageReceiver.ensureChannel(this);
+        });
+        Button myAvatar = listButton("设置我的头像");
+        myAvatar.setOnClickListener(v -> pickImage(REQ_USER_AVATAR));
+        Button wall = listButton("设置聊天背景");
+        wall.setOnClickListener(v -> pickImage(REQ_WALLPAPER));
+        Button save = listButton("保存设置");
+        save.setOnClickListener(v -> {
+            userName = safe(name.getText().toString(), "我");
+            talkCount = clamp(parseInt(context.getText().toString(), 10), 1, 30);
+            memoryThreshold = clamp(parseInt(threshold.getText().toString(), 30), 8, 200);
+            proactiveIntervalMinutes = clamp(parseInt(proactiveInterval.getText().toString(), 30), 5, 180);
+            autoMemory = autoValue[0];
+            timeInject = timeValue[0];
+            proactiveEnabled = proactiveValue[0];
+            saveState();
+            if (proactiveEnabled) {
+                requestNotificationPermission();
+                ProactiveMessageReceiver.schedule(this);
+            } else {
+                ProactiveMessageReceiver.cancel(this);
+            }
+            renderAll();
+            showSidebar();
+            Toast.makeText(this, "设置已保存", Toast.LENGTH_SHORT).show();
+        });
+        sideContent.addView(name);
+        sideContent.addView(context);
+        sideContent.addView(threshold);
+        sideContent.addView(proactiveInterval);
+        sideContent.addView(auto);
+        sideContent.addView(time);
+        sideContent.addView(proactive);
+        sideContent.addView(themeBtn);
+        sideContent.addView(notify);
+        sideContent.addView(myAvatar);
+        sideContent.addView(wall);
+        sideContent.addView(save);
+    }
+
     private void renderAll() {
         Persona p = findActivePersona();
         if (p == null) return;
         titleView.setText(p.name);
-        subTitleView.setText(p.messages.size() + " 条消息 · " + p.memories.size() + " 条记忆" + (proactiveEnabled ? " · 主动消息开" : ""));
+        subTitleView.setText(proactiveEnabled ? "主动消息已开启" : "轻触打开资料侧栏");
         renderMessages(true);
     }
 
@@ -339,6 +570,7 @@ public class MainActivity extends Activity {
         Persona p = findActivePersona();
         if (p == null) return;
         boolean shouldScroll = allowAutoScroll && isNearBottom();
+        currentAssistantTextView = null;
         messageList.removeAllViews();
         if (p.messages.isEmpty()) {
             ChatMessage tip = new ChatMessage(false, "你们现在可以开始聊天了");
@@ -376,6 +608,7 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show();
             return true;
         });
+        if (msg == currentAssistant) currentAssistantTextView = bubble;
         LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(-2, -2);
         bLp.setMargins(dp(8), 0, dp(8), 0);
 
@@ -723,6 +956,10 @@ public class MainActivity extends Activity {
     }
 
     private void showPersonaList() {
+        if (sideOverlay != null) {
+            showSidebar();
+            return;
+        }
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(12), dp(8), dp(12), dp(8));
@@ -773,6 +1010,14 @@ public class MainActivity extends Activity {
     }
 
     private void showPersonaEditor(Persona p) {
+        if (sideOverlay != null) {
+            if (p != null) activePersonaId = p.id;
+            pendingPickPersonaIndex = personas.indexOf(p);
+            saveState();
+            renderAll();
+            showSidebar();
+            return;
+        }
         int index = personas.indexOf(p);
         pendingPickPersonaIndex = index;
         LinearLayout box = new LinearLayout(this);
@@ -817,6 +1062,10 @@ public class MainActivity extends Activity {
     }
 
     private void showSettings() {
+        if (sideOverlay != null) {
+            showSidebar();
+            return;
+        }
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(14), dp(8), dp(14), 0);
@@ -1026,6 +1275,14 @@ public class MainActivity extends Activity {
     }
 
     private void showPersonaProfile(Persona p) {
+        if (sideOverlay != null) {
+            if (p != null) activePersonaId = p.id;
+            pendingPickPersonaIndex = personas.indexOf(p);
+            saveState();
+            renderAll();
+            showSidebar();
+            return;
+        }
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(14), dp(10), dp(14), dp(2));
@@ -1108,6 +1365,36 @@ public class MainActivity extends Activity {
         return b;
     }
 
+    private Button miniButton(String text) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setAllCaps(false);
+        b.setTextColor(theme.textPrimary);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        b.setBackground(roundStroke(theme.inputBg, dp(14), dp(1), theme.inputBorder));
+        return b;
+    }
+
+    private TextView sectionTitle(String text) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextColor(theme.textPrimary);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        tv.setTypeface(Typeface.DEFAULT_BOLD);
+        tv.setPadding(dp(2), dp(18), dp(2), dp(8));
+        return tv;
+    }
+
+    private TextView sidebarText(String text) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextColor(theme.textSecondary);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        tv.setLineSpacing(dp(2), 1.12f);
+        tv.setPadding(dp(2), dp(4), dp(2), dp(4));
+        return tv;
+    }
+
     private EditText field(String hint, String value, int lines) {
         EditText e = new EditText(this);
         e.setHint(hint);
@@ -1144,8 +1431,13 @@ public class MainActivity extends Activity {
     }
 
     private void scheduleStreamRender() {
+        if (currentAssistantTextView != null && currentAssistant != null) {
+            currentAssistantTextView.setText(currentAssistant.text.trim().isEmpty() ? "..." : currentAssistant.text);
+            if (isNearBottom()) scrollBottom();
+            return;
+        }
         long now = System.currentTimeMillis();
-        if (now - lastStreamRenderAt >= 110L) {
+        if (now - lastStreamRenderAt >= 180L) {
             lastStreamRenderAt = now;
             renderAll();
             return;
@@ -1156,7 +1448,7 @@ public class MainActivity extends Activity {
             streamRenderPending = false;
             lastStreamRenderAt = System.currentTimeMillis();
             renderAll();
-        }, 110L);
+        }, 180L);
     }
 
     private void showThemePicker() {

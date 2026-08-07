@@ -27,7 +27,14 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
 
     @Override
     public void onReceive(Context context, Intent intent) {
-        if (intent == null || !ACTION_HEARTBEAT.equals(intent.getAction())) return;
+        if (intent == null) return;
+        String action = intent.getAction();
+        if (Intent.ACTION_BOOT_COMPLETED.equals(action) || Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)) {
+            ensureChannel(context.getApplicationContext());
+            schedule(context.getApplicationContext());
+            return;
+        }
+        if (!ACTION_HEARTBEAT.equals(action)) return;
         PendingResult result = goAsync();
         new Thread(() -> {
             try {
@@ -45,6 +52,7 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
         AlarmManager alarm = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         if (alarm == null) return;
         PendingIntent pi = pendingIntent(context);
+        alarm.cancel(pi);
         long triggerAt = System.currentTimeMillis() + minutes * 60_000L;
         if (Build.VERSION.SDK_INT >= 23) {
             alarm.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi);
@@ -179,6 +187,9 @@ public class ProactiveMessageReceiver extends BroadcastReceiver {
                 .setAutoCancel(true)
                 .setShowWhen(true);
         NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
-        if (nm != null) nm.notify(NOTIFY_ID, builder.build());
+        try {
+            if (nm != null) nm.notify(NOTIFY_ID, builder.build());
+        } catch (SecurityException ignored) {
+        }
     }
 }
