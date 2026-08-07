@@ -54,6 +54,7 @@ jobs:
           name: APK Build ${{ github.run_number }}
           body: |
             自动构建的微聊 APK。
-            v4.0 按 WeChatBot_Web 架构重构为原生 Android 聊天模拟器。
-            支持人设即会话、隐藏记忆、临时记忆总结、上下文维护、多气泡分割、拍一拍、撤回、头像与背景设置。
+            v4.1 继续按 WeChatBot_Web 体验打磨原生 Android 聊天模拟器。
+            新增微信、QQ、iOS、Telegram、Discord 多主题与深色变体，优化头像、头栏、输入栏、气泡宽度、圆角和键盘顶起体验。
+            补齐顶部人设编辑入口、AI 头像设置、默认气泡分割提示词和长回复兜底拆分。
           files: release/wechat-native-ai.apk

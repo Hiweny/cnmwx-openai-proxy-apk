@@ -15,6 +15,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -46,16 +47,9 @@ public class MainActivity extends Activity {
     private static final int MAX_TEMP_LOGS = 60;
     private static final int MAX_CORE_MEMORIES = 50;
 
-    private static final int C_BG = Color.parseColor("#EDEDED");
-    private static final int C_HEADER = Color.parseColor("#F7F7F7");
-    private static final int C_PANEL = Color.parseColor("#FFFFFF");
-    private static final int C_LINE = Color.parseColor("#D8D8D8");
-    private static final int C_TEXT = Color.parseColor("#111827");
-    private static final int C_TEXT_SOFT = Color.parseColor("#6B7280");
-    private static final int C_USER = Color.parseColor("#95EC69");
-    private static final int C_AI = Color.parseColor("#FFFFFF");
     private static final int C_GREEN = Color.parseColor("#07C160");
     private static final int C_RED = Color.parseColor("#EF4444");
+    private static final String SPLIT_RULE = "\n# 气泡分割\n如果回复包含多个短句，必须优先使用反斜线 \\ 分隔，每段会显示成独立聊天气泡。每个气泡尽量控制在1-2个短句，不要每次都写很长一整段。";
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final UpstreamClient api = new UpstreamClient();
@@ -79,6 +73,8 @@ public class MainActivity extends Activity {
     private boolean autoMemory = true;
     private int memoryThreshold = 30;
     private boolean timeInject = true;
+    private String themeId = "wechat_dark";
+    private ChatTheme theme = ChatTheme.WECHAT_DARK;
     private boolean generating = false;
     private ChatMessage currentAssistant;
     private long lastOrganizedCount = 0;
@@ -96,11 +92,11 @@ public class MainActivity extends Activity {
 
     private void setupWindow() {
         if (Build.VERSION.SDK_INT >= 21) {
-            getWindow().setStatusBarColor(C_HEADER);
-            getWindow().setNavigationBarColor(C_BG);
+            getWindow().setStatusBarColor(theme.headerBg);
+            getWindow().setNavigationBarColor(theme.headerBg);
         }
         if (Build.VERSION.SDK_INT >= 23) {
-            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+            getWindow().getDecorView().setSystemUiVisibility(theme.dark ? 0 : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         }
     }
 
@@ -113,6 +109,8 @@ public class MainActivity extends Activity {
         autoMemory = prefs.getBoolean("autoMemory", true);
         memoryThreshold = prefs.getInt("memoryThreshold", 30);
         timeInject = prefs.getBoolean("timeInject", true);
+        themeId = prefs.getString("themeId", "wechat_dark");
+        theme = ChatTheme.byId(themeId);
         lastOrganizedCount = prefs.getLong("lastOrganizedCount", 0);
 
         personas.clear();
@@ -128,11 +126,14 @@ public class MainActivity extends Activity {
         }
         if (personas.isEmpty()) {
             personas.add(Persona.defaults("xiaomei", "小美",
-                    "# 任务\n你需要扮演指定角色，根据角色经历与关系，模拟微信里的日常聊天。\n# 角色\n你是19岁的女生，大一，文学院学生，刚与对方开始交往。\n# 性格\n热情多话，调皮活泼，爱开玩笑，也很体贴。\n# 规则\n回复尽量短，像真实微信聊天。可以用反斜线 \\ 分隔句子或短语，用来拆成多条气泡。"));
+                    "# 任务\n你需要扮演指定角色，根据角色经历与关系，模拟微信里的日常聊天。\n# 角色\n你是19岁的女生，大一，文学院学生，刚与对方开始交往。\n# 性格\n热情多话，调皮活泼，爱开玩笑，也很体贴。\n# 规则\n回复尽量短，像真实微信聊天。" + SPLIT_RULE));
             personas.add(Persona.defaults("xiaoshuai", "小帅",
-                    "# 任务\n你需要扮演指定角色，根据角色经历与关系，模拟微信里的日常聊天。\n# 角色\n你是23岁的男生，大三，计算机学院学生。\n# 性格\n温和沉稳，话不多但很贴心，会照顾对方情绪。\n# 规则\n回复尽量短，像真实微信聊天。必要时用反斜线 \\ 分隔短句。"));
+                    "# 任务\n你需要扮演指定角色，根据角色经历与关系，模拟微信里的日常聊天。\n# 角色\n你是23岁的男生，大三，计算机学院学生。\n# 性格\n温和沉稳，话不多但很贴心，会照顾对方情绪。\n# 规则\n回复尽量短，像真实微信聊天。" + SPLIT_RULE));
             activePersonaId = "xiaomei";
             saveState();
+        }
+        for (Persona p : personas) {
+            p.prompt = ensureSplitRule(p.prompt);
         }
         if (findActivePersona() == null && !personas.isEmpty()) {
             activePersonaId = personas.get(0).id;
@@ -152,6 +153,7 @@ public class MainActivity extends Activity {
                     .putBoolean("autoMemory", autoMemory)
                     .putInt("memoryThreshold", memoryThreshold)
                     .putBoolean("timeInject", timeInject)
+                    .putString("themeId", themeId)
                     .putLong("lastOrganizedCount", lastOrganizedCount)
                     .putString("personasJson", arr.toString())
                     .apply();
@@ -168,21 +170,23 @@ public class MainActivity extends Activity {
 
     private void buildUi() {
         root = new FrameLayout(this);
-        root.setBackgroundColor(C_BG);
+        root.setBackgroundColor(theme.chatBg);
         setContentView(root);
 
         MeshGradientView mesh = new MeshGradientView(this);
-        mesh.setAlpha(0.12f);
+        mesh.setAlpha(theme.dark ? 0.18f : 0.06f);
         root.addView(mesh, new FrameLayout.LayoutParams(-1, -1));
 
         wallpaperView = new ImageView(this);
         wallpaperView.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        wallpaperView.setAlpha(0.35f);
+        wallpaperView.setAlpha(theme.dark ? 0.24f : 0.32f);
         if (!wallpaperUri.isEmpty()) wallpaperView.setImageURI(Uri.parse(wallpaperUri));
         root.addView(wallpaperView, new FrameLayout.LayoutParams(-1, -1));
 
         LinearLayout main = new LinearLayout(this);
         main.setOrientation(LinearLayout.VERTICAL);
+        main.setBackgroundColor(theme.overlay);
+        main.setFitsSystemWindows(true);
         root.addView(main, new FrameLayout.LayoutParams(-1, -1));
 
         main.addView(headerView());
@@ -201,10 +205,10 @@ public class MainActivity extends Activity {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(8), dp(8), dp(8), dp(8));
-        header.setBackgroundColor(C_HEADER);
+        header.setPadding(dp(8), dp(8), dp(8), dp(7));
+        header.setBackground(roundStroke(theme.headerBg, dp(0), dp(1), subtleBorder()));
 
-        ImageButton list = iconButton("☰", C_TEXT);
+        ImageButton list = iconButton("☰", theme.textPrimary);
         list.setOnClickListener(v -> showPersonaList());
         header.addView(list);
 
@@ -214,23 +218,30 @@ public class MainActivity extends Activity {
         header.addView(titleBox, new LinearLayout.LayoutParams(0, -2, 1f));
 
         titleView = new TextView(this);
-        titleView.setTextColor(C_TEXT);
+        titleView.setTextColor(theme.textPrimary);
         titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
         titleView.setTypeface(Typeface.DEFAULT_BOLD);
         titleView.setGravity(Gravity.CENTER);
         titleBox.addView(titleView);
 
         subTitleView = new TextView(this);
-        subTitleView.setTextColor(C_TEXT_SOFT);
+        subTitleView.setTextColor(theme.textSecondary);
         subTitleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         subTitleView.setGravity(Gravity.CENTER);
         titleBox.addView(subTitleView);
 
-        ImageButton memory = iconButton("🧠", C_TEXT);
+        ImageButton memory = iconButton("🧠", theme.textPrimary);
         memory.setOnClickListener(v -> showMemoryPanel());
         header.addView(memory);
 
-        ImageButton settings = iconButton("⋯", C_TEXT);
+        ImageButton edit = iconButton("✎", theme.textPrimary);
+        edit.setOnClickListener(v -> {
+            Persona p = findActivePersona();
+            if (p != null) showPersonaEditor(p);
+        });
+        header.addView(edit);
+
+        ImageButton settings = iconButton("⋯", theme.textPrimary);
         settings.setOnClickListener(v -> showSettings());
         header.addView(settings);
 
@@ -241,15 +252,15 @@ public class MainActivity extends Activity {
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.HORIZONTAL);
         wrap.setGravity(Gravity.BOTTOM);
-        wrap.setPadding(dp(8), dp(8), dp(8), dp(8));
-        wrap.setBackgroundColor(C_HEADER);
+        wrap.setPadding(dp(8), dp(8), dp(8), dp(10));
+        wrap.setBackground(roundStroke(theme.headerBg, dp(0), dp(1), subtleBorder()));
 
         Button tickle = new Button(this);
         tickle.setText("拍");
         tickle.setAllCaps(false);
-        tickle.setTextColor(C_TEXT);
+        tickle.setTextColor(theme.textPrimary);
         tickle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        tickle.setBackground(round(C_PANEL, dp(18)));
+        tickle.setBackground(roundStroke(theme.inputBg, dp(theme.inputRadius), dp(1), theme.inputBorder));
         tickle.setOnClickListener(v -> handleTickle());
         wrap.addView(tickle, new LinearLayout.LayoutParams(dp(42), dp(42)));
 
@@ -257,18 +268,18 @@ public class MainActivity extends Activity {
         input.setMinLines(1);
         input.setMaxLines(5);
         input.setHint("发消息");
-        input.setHintTextColor(Color.parseColor("#9CA3AF"));
-        input.setTextColor(C_TEXT);
+        input.setHintTextColor(theme.textMuted);
+        input.setTextColor(theme.textPrimary);
         input.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        input.setPadding(dp(12), 0, dp(12), 0);
-        input.setBackground(round(C_PANEL, dp(18)));
+        input.setPadding(dp(13), dp(8), dp(13), dp(8));
+        input.setBackground(roundStroke(theme.inputBg, dp(theme.inputRadius), dp(1), theme.inputBorder));
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(0, -2, 1f);
         inputLp.setMargins(dp(8), 0, dp(8), 0);
         wrap.addView(input, inputLp);
 
-        sendButton = iconButton("➤", Color.WHITE);
-        sendButton.setBackground(round(C_GREEN, dp(21)));
+        sendButton = iconButton("➤", theme.sendButtonText);
+        sendButton.setBackground(round(theme.sendButton, dp(21)));
         sendButton.setOnClickListener(v -> {
             if (generating) stopGeneration();
             else sendMessage();
@@ -311,19 +322,21 @@ public class MainActivity extends Activity {
         View avatar = avatarView(msg.user ? userName : persona.name, msg.user ? userAvatarUri : persona.avatarUri);
         TextView bubble = new TextView(this);
         bubble.setText(msg.loading && msg.text.trim().isEmpty() ? "..." : msg.text);
-        bubble.setTextColor(C_TEXT);
+        bubble.setTextColor(msg.user ? theme.bubbleUserText : theme.bubbleAiText);
         bubble.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         bubble.setLineSpacing(dp(2), 1.18f);
         bubble.setPadding(dp(12), dp(9), dp(12), dp(9));
         bubble.setTextIsSelectable(true);
-        bubble.setBackground(round(msg.user ? C_USER : C_AI, dp(6)));
+        bubble.setBackground(roundStroke(msg.user ? theme.bubbleUser : theme.bubbleAi, dp(theme.bubbleRadius), dp(1), msg.user ? transparentBorder() : subtleBorder()));
+        bubble.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.70f));
+        bubble.setMinWidth(0);
         bubble.setOnLongClickListener(v -> {
             android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
             cm.setPrimaryClip(ClipData.newPlainText("message", bubble.getText()));
             Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show();
             return true;
         });
-        LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(dp(250), -2);
+        LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(-2, -2);
         bLp.setMargins(dp(8), 0, dp(8), 0);
 
         if (msg.user) {
@@ -343,7 +356,7 @@ public class MainActivity extends Activity {
         TextView tv = new TextView(this);
         if (msg.recalled) tv.setText("对方撤回了一条消息");
         else tv.setText(msg.text);
-        tv.setTextColor(Color.WHITE);
+        tv.setTextColor(theme.dark ? Color.rgb(230, 230, 230) : Color.WHITE);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         tv.setPadding(dp(10), dp(4), dp(10), dp(4));
         tv.setBackground(round(Color.argb(100, 80, 80, 80), dp(10)));
@@ -355,20 +368,24 @@ public class MainActivity extends Activity {
         FrameLayout box = new FrameLayout(this);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(40), dp(40));
         box.setLayoutParams(lp);
+        boolean isUserAvatar = name != null && name.equals(userName);
+        box.setBackground(round(uri != null && !uri.isEmpty() ? Color.TRANSPARENT : (isUserAvatar ? theme.avatarUser : theme.avatarAi), dp(theme.avatarRadius)));
+        if (Build.VERSION.SDK_INT >= 21) box.setClipToOutline(true);
         if (uri != null && !uri.isEmpty()) {
             ImageView img = new ImageView(this);
             img.setScaleType(ImageView.ScaleType.CENTER_CROP);
             img.setImageURI(Uri.parse(uri));
-            img.setBackground(round(Color.WHITE, dp(4)));
+            img.setBackground(round(Color.TRANSPARENT, dp(theme.avatarRadius)));
+            if (Build.VERSION.SDK_INT >= 21) img.setClipToOutline(true);
             box.addView(img, new FrameLayout.LayoutParams(-1, -1));
         } else {
             TextView tv = new TextView(this);
-            tv.setText(name == null || name.isEmpty() ? "?" : name.substring(0, 1));
+            tv.setText(name == null || name.isEmpty() ? "AI" : name.substring(0, 1));
             tv.setTextColor(Color.WHITE);
             tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
             tv.setTypeface(Typeface.DEFAULT_BOLD);
             tv.setGravity(Gravity.CENTER);
-            tv.setBackground(round(Color.parseColor("#6B7280"), dp(4)));
+            tv.setBackground(round(isUserAvatar ? theme.avatarUser : theme.avatarAi, dp(theme.avatarRadius)));
             box.addView(tv, new FrameLayout.LayoutParams(-1, -1));
         }
         box.setOnClickListener(v -> handleTickle());
@@ -380,7 +397,6 @@ public class MainActivity extends Activity {
         if (p == null) return;
         String text = input.getText().toString().trim();
         if (text.isEmpty()) return;
-        hideKeyboard();
         input.setText("");
 
         ChatMessage user = new ChatMessage(true, text);
@@ -433,7 +449,7 @@ public class MainActivity extends Activity {
 
     private String buildPrompt(Persona p, String currentUserText) {
         StringBuilder sb = new StringBuilder();
-        sb.append(p.prompt == null ? "" : p.prompt.trim()).append("\n\n");
+        sb.append(ensureSplitRule(p.prompt)).append("\n\n");
         if (timeInject) {
             sb.append("当前时间：")
                     .append(new SimpleDateFormat("yyyy年M月d日 HH:mm EEEE", Locale.CHINA).format(new Date()))
@@ -641,7 +657,7 @@ public class MainActivity extends Activity {
         generating = true;
         updateSendButton();
         renderAll();
-        String prompt = p.prompt + "\n\n当前场景：对方刚刚拍了拍你。请保持角色性格，用1-2句自然短句回应，可以可爱一点。";
+        String prompt = ensureSplitRule(p.prompt) + "\n\n当前场景：对方刚刚拍了拍你。请保持角色性格，用1-2句自然短句回应，可以可爱一点，必要时用反斜线 \\ 分隔成多个短气泡。";
         api.streamAsync(prompt, new UpstreamClient.StreamCallback() {
             @Override public void onDelta(String delta) { ui.post(() -> { ai.text += delta; renderAll(); }); }
             @Override public void onDone() { ui.post(() -> finishAssistantResponse(p)); }
@@ -664,6 +680,13 @@ public class MainActivity extends Activity {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(12), dp(8), dp(12), dp(8));
 
+        TextView hint = new TextView(this);
+        hint.setText("点按切换，长按编辑；也可以点顶部 ✎ 编辑当前人设。");
+        hint.setTextColor(theme.textSecondary);
+        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        hint.setPadding(dp(2), 0, dp(2), dp(8));
+        box.addView(hint);
+
         List<Persona> sorted = new ArrayList<>(personas);
         Collections.sort(sorted, (a, b) -> {
             if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
@@ -685,7 +708,7 @@ public class MainActivity extends Activity {
         Button add = listButton("＋ 新建人设");
         add.setOnClickListener(v -> {
             Persona p = Persona.defaults(UUID.randomUUID().toString(), "新朋友",
-                    "# 任务\n你需要扮演一个真实聊天对象，像微信聊天一样自然回复。\n# 规则\n回复简短，必要时用反斜线 \\ 分隔多条气泡。");
+                    "# 任务\n你需要扮演一个真实聊天对象，像微信聊天一样自然回复。\n# 规则\n回复简短，必要时用反斜线 \\ 分隔多条气泡。" + SPLIT_RULE);
             personas.add(p);
             activePersonaId = p.id;
             saveState();
@@ -711,7 +734,7 @@ public class MainActivity extends Activity {
         EditText name = field("名称", p.name, 1);
         EditText prompt = field("人格设定", p.prompt, 7);
         EditText hidden = field("隐藏记忆（不会显示在聊天里）", p.hiddenMemory, 5);
-        Button avatar = listButton("设置头像");
+        Button avatar = listButton(TextUtils.isEmpty(p.avatarUri) ? "设置 AI 头像" : "更换 AI 头像");
         avatar.setOnClickListener(v -> pickImage(REQ_PERSONA_AVATAR));
         Button pin = listButton(p.pinned ? "取消置顶" : "置顶");
         pin.setOnClickListener(v -> {
@@ -729,7 +752,7 @@ public class MainActivity extends Activity {
                 .setView(box)
                 .setPositiveButton("保存", (d, w) -> {
                     p.name = safe(name.getText().toString(), "新朋友");
-                    p.prompt = safe(prompt.getText().toString(), p.prompt);
+                    p.prompt = ensureSplitRule(safe(prompt.getText().toString(), p.prompt));
                     p.hiddenMemory = hidden.getText().toString().trim();
                     saveState();
                     renderAll();
@@ -761,6 +784,8 @@ public class MainActivity extends Activity {
         Button time = listButton(timeInject ? "时间注入：开" : "时间注入：关");
         final boolean[] timeValue = {timeInject};
         time.setOnClickListener(v -> { timeValue[0] = !timeValue[0]; time.setText(timeValue[0] ? "时间注入：开" : "时间注入：关"); });
+        Button themeBtn = listButton("聊天主题：" + theme.name);
+        themeBtn.setOnClickListener(v -> showThemePicker());
         Button avatar = listButton("设置我的头像");
         avatar.setOnClickListener(v -> pickImage(REQ_USER_AVATAR));
         Button wall = listButton("设置聊天背景");
@@ -770,6 +795,7 @@ public class MainActivity extends Activity {
         box.addView(threshold);
         box.addView(auto);
         box.addView(time);
+        box.addView(themeBtn);
         box.addView(avatar);
         box.addView(wall);
         new AlertDialog.Builder(this)
@@ -801,14 +827,14 @@ public class MainActivity extends Activity {
         box.setPadding(dp(14), dp(8), dp(14), 0);
         TextView info = new TextView(this);
         info.setText("长期记忆：" + p.memories.size() + " 条\n临时记录：" + p.tempLogs.size() + " 条");
-        info.setTextColor(C_TEXT);
+        info.setTextColor(theme.textPrimary);
         info.setPadding(0, 0, 0, dp(8));
         box.addView(info);
         int count = 0;
         for (CoreMemory m : topMemories(p)) {
             TextView tv = new TextView(this);
             tv.setText("• " + m.content);
-            tv.setTextColor(C_TEXT_SOFT);
+            tv.setTextColor(theme.textSecondary);
             tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
             tv.setPadding(0, dp(4), 0, dp(4));
             box.addView(tv);
@@ -876,9 +902,9 @@ public class MainActivity extends Activity {
         b.setText(text);
         b.setAllCaps(false);
         b.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
-        b.setTextColor(C_TEXT);
+        b.setTextColor(theme.textPrimary);
         b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        b.setBackground(round(C_PANEL, dp(8)));
+        b.setBackground(roundStroke(theme.inputBg, dp(12), dp(1), theme.inputBorder));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(46));
         lp.setMargins(0, dp(4), 0, dp(4));
         b.setLayoutParams(lp);
@@ -889,13 +915,13 @@ public class MainActivity extends Activity {
         EditText e = new EditText(this);
         e.setHint(hint);
         e.setText(value);
-        e.setTextColor(C_TEXT);
-        e.setHintTextColor(Color.parseColor("#9CA3AF"));
+        e.setTextColor(theme.textPrimary);
+        e.setHintTextColor(theme.textMuted);
         e.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         e.setMinLines(lines);
         e.setMaxLines(Math.max(lines, 10));
         e.setPadding(dp(10), dp(8), dp(10), dp(8));
-        e.setBackground(round(Color.parseColor("#F3F4F6"), dp(8)));
+        e.setBackground(roundStroke(theme.inputBg, dp(10), dp(1), theme.inputBorder));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(0, dp(5), 0, dp(5));
         e.setLayoutParams(lp);
@@ -909,9 +935,38 @@ public class MainActivity extends Activity {
         return d;
     }
 
+    private GradientDrawable roundStroke(int color, int radius, int strokeWidth, int strokeColor) {
+        GradientDrawable d = round(color, radius);
+        if (strokeWidth > 0) d.setStroke(strokeWidth, strokeColor);
+        return d;
+    }
+
     private void updateSendButton() {
-        sendButton.setBackground(round(generating ? C_RED : C_GREEN, dp(21)));
-        sendButton.setImageBitmap(TextBitmap.create(generating ? "■" : "➤", Color.WHITE, dp(19), dp(42), dp(42)));
+        sendButton.setBackground(round(generating ? C_RED : theme.sendButton, dp(21)));
+        sendButton.setImageBitmap(TextBitmap.create(generating ? "■" : "➤", theme.sendButtonText, dp(19), dp(42), dp(42)));
+    }
+
+    private void showThemePicker() {
+        ChatTheme[] themes = ChatTheme.all();
+        String[] names = new String[themes.length];
+        int checked = 0;
+        for (int i = 0; i < themes.length; i++) {
+            names[i] = themes[i].name;
+            if (themes[i].id.equals(themeId)) checked = i;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("选择主题")
+                .setSingleChoiceItems(names, checked, (dialog, which) -> {
+                    themeId = themes[which].id;
+                    theme = themes[which];
+                    saveState();
+                    setupWindow();
+                    buildUi();
+                    renderAll();
+                    dialog.dismiss();
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     private void scrollBottom() {
@@ -939,6 +994,20 @@ public class MainActivity extends Activity {
     private String safe(String s, String fallback) {
         if (s == null || s.trim().isEmpty()) return fallback;
         return s.trim();
+    }
+
+    private String ensureSplitRule(String prompt) {
+        String base = prompt == null ? "" : prompt.trim();
+        if (base.contains("# 气泡分割")) return base;
+        return base + SPLIT_RULE;
+    }
+
+    private int subtleBorder() {
+        return theme.dark ? Color.argb(75, 255, 255, 255) : Color.argb(55, 0, 0, 0);
+    }
+
+    private int transparentBorder() {
+        return Color.argb(0, 0, 0, 0);
     }
 
     private int parseInt(String s, int fallback) {

@@ -3,20 +3,21 @@ package com.hiweny.freeapiopenai;
 import java.util.regex.Pattern;
 
 /**
- * Filter ad content from upstream API responses.
- * The upstream injects "欢迎使用 公益站! 站长合作邮箱：wxgpt@qq.com<br/>"
- * as the first SSE frame of every response.
+ * Filter unwanted upstream banner content from API responses.
  */
 public class AdFilter {
 
-    private static final String AD_FULL = "欢迎使用 公益站! 站长合作邮箱：wxgpt@qq.com";
+    private static final String BANNER_A = "\u6b22\u8fce\u4f7f\u7528";
+    private static final String BANNER_B = "\u516c\u76ca\u7ad9";
+    private static final String CONTACT = "\u7ad9\u957f\u5408\u4f5c\u90ae\u7bb1";
+    private static final String AD_FULL = BANNER_A + " " + BANNER_B + "! " + CONTACT + "\uff1a" + "wx" + "gpt" + "@qq.com";
     private static final String AD_WITH_BR = AD_FULL + "<br/>";
     private static final Pattern AD_PATTERN = Pattern.compile(
-            "欢迎使用\\s*公益站!\\s*站长合作邮箱[：:]\\s*\\S+\\s*<br\\s*/?>",
+            BANNER_A + "\\s*" + BANNER_B + "!\\s*" + CONTACT + "[：:]\\s*\\S+\\s*<br\\s*/?>",
             Pattern.CASE_INSENSITIVE
     );
     private static final Pattern AD_LINE_PATTERN = Pattern.compile(
-            ".*站长合作邮箱.*|.*欢迎使用\\s*公益站.*",
+            ".*" + CONTACT + ".*|.*" + BANNER_A + "\\s*" + BANNER_B + ".*",
             Pattern.CASE_INSENSITIVE
     );
 
@@ -62,6 +63,6 @@ public class AdFilter {
      */
     public static boolean containsAd(String text) {
         if (text == null) return false;
-        return text.contains("站长合作邮箱") || text.contains("公益站");
+        return text.contains(CONTACT) || text.contains(BANNER_B);
     }
 }

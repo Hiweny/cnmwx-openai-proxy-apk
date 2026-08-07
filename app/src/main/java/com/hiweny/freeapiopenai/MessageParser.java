@@ -28,7 +28,7 @@ class MessageParser {
             text = text.replace("[recall]", "");
         }
 
-        String[] split = text.trim().split("\\\\+n?|\\n{2,}");
+        String[] split = text.trim().split("\\\\+n?|\\n+");
         for (String s : split) {
             String part = s.trim().replace("\n", " ");
             if (!part.isEmpty()) parsed.parts.add(part);
@@ -36,6 +36,26 @@ class MessageParser {
         if (parsed.parts.isEmpty() && !text.trim().isEmpty()) {
             parsed.parts.add(text.trim());
         }
+        if (parsed.parts.size() == 1 && parsed.parts.get(0).length() > 52) {
+            parsed.parts.clear();
+            splitLongText(text.trim(), parsed.parts);
+        }
         return parsed;
+    }
+
+    private static void splitLongText(String text, List<String> out) {
+        StringBuilder current = new StringBuilder();
+        String[] sentences = text.split("(?<=[。！？!?~～…])");
+        for (String sentence : sentences) {
+            String s = sentence.trim();
+            if (s.isEmpty()) continue;
+            if (current.length() > 0 && current.length() + s.length() > 46) {
+                out.add(current.toString().trim());
+                current.setLength(0);
+            }
+            current.append(s);
+        }
+        if (current.length() > 0) out.add(current.toString().trim());
+        if (out.isEmpty()) out.add(text);
     }
 }
