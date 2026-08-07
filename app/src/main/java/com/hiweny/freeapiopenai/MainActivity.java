@@ -2,10 +2,12 @@ package com.hiweny.freeapiopenai;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.Manifest;
 import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -14,11 +16,15 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
+import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
@@ -44,6 +50,7 @@ public class MainActivity extends Activity {
     private static final int REQ_WALLPAPER = 3001;
     private static final int REQ_USER_AVATAR = 3002;
     private static final int REQ_PERSONA_AVATAR = 3003;
+    private static final int REQ_NOTIFICATIONS = 3004;
     private static final int MAX_TEMP_LOGS = 60;
     private static final int MAX_CORE_MEMORIES = 50;
 
@@ -64,6 +71,8 @@ public class MainActivity extends Activity {
     private ImageButton sendButton;
     private TextView titleView;
     private TextView subTitleView;
+    private long lastStreamRenderAt = 0L;
+    private boolean streamRenderPending = false;
 
     private String activePersonaId = "xiaomei";
     private String userName = "我";
@@ -73,6 +82,8 @@ public class MainActivity extends Activity {
     private boolean autoMemory = true;
     private int memoryThreshold = 30;
     private boolean timeInject = true;
+    private boolean proactiveEnabled = false;
+    private int proactiveIntervalMinutes = 30;
     private String themeId = "wechat_dark";
     private ChatTheme theme = ChatTheme.WECHAT_DARK;
     private boolean generating = false;
@@ -86,8 +97,10 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("wechat_native_state", MODE_PRIVATE);
         loadState();
         setupWindow();
+        ProactiveMessageReceiver.ensureChannel(this);
         buildUi();
         renderAll();
+        ProactiveMessageReceiver.schedule(this);
     }
 
     private void setupWindow() {
@@ -109,6 +122,8 @@ public class MainActivity extends Activity {
         autoMemory = prefs.getBoolean("autoMemory", true);
         memoryThreshold = prefs.getInt("memoryThreshold", 30);
         timeInject = prefs.getBoolean("timeInject", true);
+        proactiveEnabled = prefs.getBoolean("proactiveEnabled", false);
+        proactiveIntervalMinutes = prefs.getInt("proactiveIntervalMinutes", 30);
         themeId = prefs.getString("themeId", "wechat_dark");
         theme = ChatTheme.byId(themeId);
         lastOrganizedCount = prefs.getLong("lastOrganizedCount", 0);
@@ -153,6 +168,8 @@ public class MainActivity extends Activity {
                     .putBoolean("autoMemory", autoMemory)
                     .putInt("memoryThreshold", memoryThreshold)
                     .putBoolean("timeInject", timeInject)
+                    .putBoolean("proactiveEnabled", proactiveEnabled)
+                    .putInt("proactiveIntervalMinutes", proactiveIntervalMinutes)
                     .putString("themeId", themeId)
                     .putLong("lastOrganizedCount", lastOrganizedCount)
                     .putString("personasJson", arr.toString())
@@ -189,7 +206,9 @@ public class MainActivity extends Activity {
         main.setFitsSystemWindows(true);
         root.addView(main, new FrameLayout.LayoutParams(-1, -1));
 
-        main.addView(headerView());
+        LinearLayout.LayoutParams headerLp = new LinearLayout.LayoutParams(-1, -2);
+        headerLp.setMargins(dp(8), dp(8), dp(8), 0);
+        main.addView(headerView(), headerLp);
 
         scrollView = new ScrollView(this);
         messageList = new LinearLayout(this);
@@ -198,15 +217,17 @@ public class MainActivity extends Activity {
         scrollView.addView(messageList, new ScrollView.LayoutParams(-1, -2));
         main.addView(scrollView, new LinearLayout.LayoutParams(-1, 0, 1f));
 
-        main.addView(inputBar());
+        LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(-1, -2);
+        inputLp.setMargins(dp(8), 0, dp(8), dp(8));
+        main.addView(inputBar(), inputLp);
     }
 
     private View headerView() {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(8), dp(8), dp(8), dp(7));
-        header.setBackground(roundStroke(theme.headerBg, dp(0), dp(1), subtleBorder()));
+        header.setPadding(dp(10), dp(8), dp(10), dp(8));
+        header.setBackground(roundStroke(theme.headerBg, dp(18), dp(1), subtleBorder()));
 
         ImageButton list = iconButton("☰", theme.textPrimary);
         list.setOnClickListener(v -> showPersonaList());
@@ -215,6 +236,10 @@ public class MainActivity extends Activity {
         LinearLayout titleBox = new LinearLayout(this);
         titleBox.setOrientation(LinearLayout.VERTICAL);
         titleBox.setGravity(Gravity.CENTER);
+        titleBox.setOnClickListener(v -> {
+            Persona p = findActivePersona();
+            if (p != null) showPersonaProfile(p);
+        });
         header.addView(titleBox, new LinearLayout.LayoutParams(0, -2, 1f));
 
         titleView = new TextView(this);
@@ -252,8 +277,8 @@ public class MainActivity extends Activity {
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.HORIZONTAL);
         wrap.setGravity(Gravity.BOTTOM);
-        wrap.setPadding(dp(8), dp(8), dp(8), dp(10));
-        wrap.setBackground(roundStroke(theme.headerBg, dp(0), dp(1), subtleBorder()));
+        wrap.setPadding(dp(9), dp(9), dp(9), dp(9));
+        wrap.setBackground(roundStroke(theme.headerBg, dp(20), dp(1), subtleBorder()));
 
         Button tickle = new Button(this);
         tickle.setText("拍");
@@ -274,6 +299,20 @@ public class MainActivity extends Activity {
         input.setPadding(dp(13), dp(8), dp(13), dp(8));
         input.setBackground(roundStroke(theme.inputBg, dp(theme.inputRadius), dp(1), theme.inputBorder));
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        input.setSingleLine(false);
+        input.setImeOptions(EditorInfo.IME_ACTION_SEND);
+        input.setOnEditorActionListener((v, actionId, event) -> {
+            boolean enterSend = event != null
+                    && event.getKeyCode() == KeyEvent.KEYCODE_ENTER
+                    && event.getAction() == KeyEvent.ACTION_UP
+                    && !event.isShiftPressed();
+            if (actionId == EditorInfo.IME_ACTION_SEND || enterSend) {
+                if (generating) stopGeneration();
+                else sendMessage();
+                return true;
+            }
+            return false;
+        });
         LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(0, -2, 1f);
         inputLp.setMargins(dp(8), 0, dp(8), 0);
         wrap.addView(input, inputLp);
@@ -292,13 +331,14 @@ public class MainActivity extends Activity {
         Persona p = findActivePersona();
         if (p == null) return;
         titleView.setText(p.name);
-        subTitleView.setText(p.messages.size() + " 条消息 · " + p.memories.size() + " 条记忆");
-        renderMessages();
+        subTitleView.setText(p.messages.size() + " 条消息 · " + p.memories.size() + " 条记忆" + (proactiveEnabled ? " · 主动消息开" : ""));
+        renderMessages(true);
     }
 
-    private void renderMessages() {
+    private void renderMessages(boolean allowAutoScroll) {
         Persona p = findActivePersona();
         if (p == null) return;
+        boolean shouldScroll = allowAutoScroll && isNearBottom();
         messageList.removeAllViews();
         if (p.messages.isEmpty()) {
             ChatMessage tip = new ChatMessage(false, "你们现在可以开始聊天了");
@@ -310,7 +350,7 @@ public class MainActivity extends Activity {
                 else messageList.addView(chatBubble(p, m));
             }
         }
-        scrollBottom();
+        if (shouldScroll) scrollBottom();
     }
 
     private View chatBubble(Persona persona, ChatMessage msg) {
@@ -389,6 +429,11 @@ public class MainActivity extends Activity {
             box.addView(tv, new FrameLayout.LayoutParams(-1, -1));
         }
         box.setOnClickListener(v -> handleTickle());
+        box.setOnLongClickListener(v -> {
+            Persona p = findActivePersona();
+            if (p != null && !isUserAvatar) showPersonaProfile(p);
+            return !isUserAvatar;
+        });
         return box;
     }
 
@@ -402,6 +447,7 @@ public class MainActivity extends Activity {
         ChatMessage user = new ChatMessage(true, text);
         p.messages.add(user);
         addTempLog(p, "user", text);
+        p.lastUserMessageTime = System.currentTimeMillis();
 
         currentAssistant = new ChatMessage(false, "");
         currentAssistant.loading = true;
@@ -419,7 +465,7 @@ public class MainActivity extends Activity {
                 ui.post(() -> {
                     if (currentAssistant != null) {
                         currentAssistant.text += delta;
-                        renderAll();
+                        scheduleStreamRender();
                     }
                 });
             }
@@ -526,6 +572,7 @@ public class MainActivity extends Activity {
         saveState();
         renderAll();
         maybeAutoOrganize(p);
+        ProactiveMessageReceiver.schedule(this);
     }
 
     private void stopGeneration() {
@@ -659,7 +706,7 @@ public class MainActivity extends Activity {
         renderAll();
         String prompt = ensureSplitRule(p.prompt) + "\n\n当前场景：对方刚刚拍了拍你。请保持角色性格，用1-2句自然短句回应，可以可爱一点，必要时用反斜线 \\ 分隔成多个短气泡。";
         api.streamAsync(prompt, new UpstreamClient.StreamCallback() {
-            @Override public void onDelta(String delta) { ui.post(() -> { ai.text += delta; renderAll(); }); }
+            @Override public void onDelta(String delta) { ui.post(() -> { ai.text += delta; scheduleStreamRender(); }); }
             @Override public void onDone() { ui.post(() -> finishAssistantResponse(p)); }
             @Override public void onError(Exception error) { ui.post(() -> { ai.loading = false; ai.text = "哎呀，刚刚没反应过来"; currentAssistant = null; generating = false; updateSendButton(); renderAll(); }); }
         });
@@ -784,6 +831,20 @@ public class MainActivity extends Activity {
         Button time = listButton(timeInject ? "时间注入：开" : "时间注入：关");
         final boolean[] timeValue = {timeInject};
         time.setOnClickListener(v -> { timeValue[0] = !timeValue[0]; time.setText(timeValue[0] ? "时间注入：开" : "时间注入：关"); });
+        Button proactive = listButton(proactiveEnabled ? "主动消息：开" : "主动消息：关");
+        final boolean[] proactiveValue = {proactiveEnabled};
+        proactive.setOnClickListener(v -> {
+            proactiveValue[0] = !proactiveValue[0];
+            proactive.setText(proactiveValue[0] ? "主动消息：开" : "主动消息：关");
+        });
+        EditText proactiveInterval = field("主动消息心跳间隔（分钟，建议 15-60）", String.valueOf(proactiveIntervalMinutes), 1);
+        proactiveInterval.setInputType(InputType.TYPE_CLASS_NUMBER);
+        Button notify = listButton("申请通知权限 / 后台保活");
+        notify.setOnClickListener(v -> {
+            requestNotificationPermission();
+            requestBatteryOptimizationIgnore();
+            ProactiveMessageReceiver.ensureChannel(this);
+        });
         Button themeBtn = listButton("聊天主题：" + theme.name);
         themeBtn.setOnClickListener(v -> showThemePicker());
         Button avatar = listButton("设置我的头像");
@@ -795,6 +856,9 @@ public class MainActivity extends Activity {
         box.addView(threshold);
         box.addView(auto);
         box.addView(time);
+        box.addView(proactive);
+        box.addView(proactiveInterval);
+        box.addView(notify);
         box.addView(themeBtn);
         box.addView(avatar);
         box.addView(wall);
@@ -807,7 +871,15 @@ public class MainActivity extends Activity {
                     memoryThreshold = clamp(parseInt(threshold.getText().toString(), 30), 8, 200);
                     autoMemory = autoValue[0];
                     timeInject = timeValue[0];
+                    proactiveEnabled = proactiveValue[0];
+                    proactiveIntervalMinutes = clamp(parseInt(proactiveInterval.getText().toString(), 30), 5, 180);
                     saveState();
+                    if (proactiveEnabled) {
+                        requestNotificationPermission();
+                        ProactiveMessageReceiver.schedule(this);
+                    } else {
+                        ProactiveMessageReceiver.cancel(this);
+                    }
                     renderAll();
                 })
                 .setNegativeButton("清空背景", (d, w) -> {
@@ -858,12 +930,137 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    private void triggerManualProactive(Persona p) {
+        if (p == null || generating) return;
+        ChatMessage ai = new ChatMessage(false, "");
+        ai.loading = true;
+        p.messages.add(ai);
+        currentAssistant = ai;
+        generating = true;
+        updateSendButton();
+        renderAll();
+        String prompt = buildProactivePrompt(p, true);
+        api.streamAsync(prompt, new UpstreamClient.StreamCallback() {
+            @Override public void onDelta(String delta) {
+                ui.post(() -> {
+                    ai.text += delta;
+                    scheduleStreamRender();
+                });
+            }
+            @Override public void onDone() {
+                ui.post(() -> {
+                    p.lastProactiveTime = System.currentTimeMillis();
+                    finishAssistantResponse(p);
+                });
+            }
+            @Override public void onError(Exception error) {
+                ui.post(() -> {
+                    ai.loading = false;
+                    ai.text = "我本来想主动找你来着，结果卡住了";
+                    currentAssistant = null;
+                    generating = false;
+                    updateSendButton();
+                    saveState();
+                    renderAll();
+                });
+            }
+        });
+    }
+
+    private String buildProactivePrompt(Persona p, boolean forceSend) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(ensureSplitRule(p.prompt)).append("\n\n");
+        if (timeInject) {
+            sb.append("当前时间：")
+                    .append(new SimpleDateFormat("yyyy年M月d日 HH:mm EEEE", Locale.CHINA).format(new Date()))
+                    .append("\n");
+        }
+        if (p.hiddenMemory != null && !p.hiddenMemory.trim().isEmpty()) {
+            sb.append("长期背景，只用于保持一致，不要主动说出：\n")
+                    .append(p.hiddenMemory.trim()).append("\n");
+        }
+        sb.append("最近聊天记录：\n");
+        List<ChatMessage> history = selectContext(p);
+        for (ChatMessage m : history) {
+            sb.append(m.user ? userName : p.name).append("：").append(m.text).append("\n");
+        }
+        if (forceSend) {
+            sb.append("\n现在请你根据人设和上下文主动给用户发一条自然消息。像真实聊天一样短，1-2句即可，必要时用反斜线 \\ 分隔多个气泡。不要解释。");
+        } else {
+            sb.append("\n用户有一段时间没说话。请判断是否适合主动发消息；如果不适合只回复 [skip]，如果适合就发一条短消息。");
+        }
+        sb.append("\n").append(p.name).append("：");
+        return sb.toString();
+    }
+
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTIFICATIONS);
+        }
+    }
+
+    private void requestBatteryOptimizationIgnore() {
+        if (Build.VERSION.SDK_INT < 23) return;
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                intent.setData(Uri.parse("package:" + getPackageName()));
+                startActivity(intent);
+            }
+        } catch (Exception e) {
+            try {
+                startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+            } catch (Exception ignored) {
+                Toast.makeText(this, "请在系统设置里允许后台运行", Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
+
     private void pickImage(int requestCode) {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("image/*");
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         startActivityForResult(intent, requestCode);
+    }
+
+    private void showPersonaProfile(Persona p) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(14), dp(10), dp(14), dp(2));
+
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        View avatar = avatarView(p.name, p.avatarUri);
+        TextView info = new TextView(this);
+        info.setText(p.name + "\n" + p.messages.size() + " 条消息 · " + p.memories.size() + " 条记忆");
+        info.setTextColor(theme.textPrimary);
+        info.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        info.setPadding(dp(12), 0, 0, 0);
+        top.addView(avatar);
+        top.addView(info, new LinearLayout.LayoutParams(0, -2, 1f));
+        box.addView(top);
+
+        Button avatarBtn = listButton(TextUtils.isEmpty(p.avatarUri) ? "设置 AI 头像" : "更换 AI 头像");
+        avatarBtn.setOnClickListener(v -> {
+            pendingPickPersonaIndex = personas.indexOf(p);
+            pickImage(REQ_PERSONA_AVATAR);
+        });
+        Button editBtn = listButton("编辑人格和隐藏记忆");
+        editBtn.setOnClickListener(v -> showPersonaEditor(p));
+        Button proactiveNow = listButton("让 TA 现在主动发一条");
+        proactiveNow.setOnClickListener(v -> triggerManualProactive(p));
+        box.addView(avatarBtn);
+        box.addView(editBtn);
+        box.addView(proactiveNow);
+
+        new AlertDialog.Builder(this)
+                .setTitle("聊天资料")
+                .setView(box)
+                .setPositiveButton("关闭", null)
+                .show();
     }
 
     @Override
@@ -946,6 +1143,22 @@ public class MainActivity extends Activity {
         sendButton.setImageBitmap(TextBitmap.create(generating ? "■" : "➤", theme.sendButtonText, dp(19), dp(42), dp(42)));
     }
 
+    private void scheduleStreamRender() {
+        long now = System.currentTimeMillis();
+        if (now - lastStreamRenderAt >= 110L) {
+            lastStreamRenderAt = now;
+            renderAll();
+            return;
+        }
+        if (streamRenderPending) return;
+        streamRenderPending = true;
+        ui.postDelayed(() -> {
+            streamRenderPending = false;
+            lastStreamRenderAt = System.currentTimeMillis();
+            renderAll();
+        }, 110L);
+    }
+
     private void showThemePicker() {
         ChatTheme[] themes = ChatTheme.all();
         String[] names = new String[themes.length];
@@ -971,6 +1184,12 @@ public class MainActivity extends Activity {
 
     private void scrollBottom() {
         scrollView.postDelayed(() -> scrollView.fullScroll(View.FOCUS_DOWN), 50);
+    }
+
+    private boolean isNearBottom() {
+        if (scrollView == null || messageList == null || messageList.getChildCount() == 0) return true;
+        int diff = messageList.getBottom() - (scrollView.getHeight() + scrollView.getScrollY());
+        return diff < dp(96);
     }
 
     private void hideKeyboard() {

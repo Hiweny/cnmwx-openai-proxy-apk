@@ -15,6 +15,8 @@ class Persona {
     String hiddenMemory = "";
     boolean pinned = false;
     long lastMessageTime = System.currentTimeMillis();
+    long lastUserMessageTime = 0L;
+    long lastProactiveTime = 0L;
     final List<ChatMessage> messages = new ArrayList<>();
     final List<CoreMemory> memories = new ArrayList<>();
     final List<TempLog> tempLogs = new ArrayList<>();
@@ -36,6 +38,8 @@ class Persona {
         o.put("hiddenMemory", hiddenMemory);
         o.put("pinned", pinned);
         o.put("lastMessageTime", lastMessageTime);
+        o.put("lastUserMessageTime", lastUserMessageTime);
+        o.put("lastProactiveTime", lastProactiveTime);
         JSONArray ms = new JSONArray();
         for (ChatMessage m : messages) ms.put(m.toJson());
         JSONArray cms = new JSONArray();
@@ -57,6 +61,8 @@ class Persona {
         p.hiddenMemory = o.optString("hiddenMemory", "");
         p.pinned = o.optBoolean("pinned", false);
         p.lastMessageTime = o.optLong("lastMessageTime", System.currentTimeMillis());
+        p.lastUserMessageTime = o.optLong("lastUserMessageTime", 0L);
+        p.lastProactiveTime = o.optLong("lastProactiveTime", 0L);
         JSONArray ms = o.optJSONArray("messages");
         if (ms != null) {
             for (int i = 0; i < ms.length(); i++) {
