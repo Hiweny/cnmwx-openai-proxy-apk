@@ -101,12 +101,12 @@ public class UpstreamClient {
         currentCall = call;
         try (Response response = call.execute()) {
             if (!response.isSuccessful()) {
-                throw new IllegalStateException("上游接口返回错误码: " + response.code());
+                throw new IllegalStateException("服务暂时不可用: " + response.code());
             }
 
             ResponseBody body = response.body();
             if (body == null) {
-                throw new IllegalStateException("上游接口返回空响应");
+                throw new IllegalStateException("服务暂时没有响应");
             }
 
             String contentType = response.header("content-type", "");

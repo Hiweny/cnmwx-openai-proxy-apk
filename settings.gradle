@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "公益聊天"
+rootProject.name = "微聊"
 include ":app"
